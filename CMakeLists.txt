@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(obs-frameflow VERSION 0.1.0 LANGUAGES C CXX)
+# version.txt is owned by release-please, so it is the single source of truth.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" _frameflow_version LIMIT_COUNT 1)
+string(STRIP "${_frameflow_version}" _frameflow_version)
+if(NOT _frameflow_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "version.txt must hold a numeric semver, got '${_frameflow_version}'")
+endif()
+
+project(obs-frameflow VERSION ${_frameflow_version} LANGUAGES C CXX)
 
 set(FRAMEFLOW_VERSION "${PROJECT_VERSION}" CACHE STRING
     "Version string embedded in the build (may be a git tag or CI build id)")

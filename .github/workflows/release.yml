@@ -2,47 +2,46 @@ name: release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [master]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to publish (e.g. v0.1.0)
-        required: true
-        type: string
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  meta:
-    name: Resolve version
+  release-please:
+    name: Release PR / tag
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.value }}
-      tag: ${{ steps.version.outputs.tag }}
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Compute version
-        id: version
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "value=${tag#v}" >> "$GITHUB_OUTPUT"
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   build:
-    name: Build
-    needs: meta
+    name: Build release artefact
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
     uses: ./.github/workflows/build.yml
     with:
-      version: ${{ needs.meta.outputs.version }}
+      version: ${{ needs.release-please.outputs.version }}
 
   publish:
-    name: Publish draft release
-    needs: [meta, build]
+    name: Attach binaries to release
+    needs: [release-please, build]
+    if: needs.release-please.outputs.released == 'true'
     runs-on: windows-2022
     steps:
       - name: Checkout
@@ -57,12 +56,12 @@ jobs:
       - name: Assemble release archive
         shell: pwsh
         run: |
-          $version = "${{ needs.meta.outputs.version }}"
+          $version = "${{ needs.release-please.outputs.version }}"
           $stage = "release/frameflow"
           New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
 
           Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/bin/64bit/"
-          # OBS expects <plugin>/bin/64bit and <plugin>/data next to each other
+          # install(DIRECTORY data/) flattens effects/ and locale/ into the plugin dir
           Copy-Item -Recurse "package/obs-plugins/frameflow" "$stage/data"
           Copy-Item "LICENSE", "README.md" "$stage/"
 
@@ -74,20 +73,11 @@ jobs:
 
           Get-ChildItem $archive, SHA256SUMS.txt | Select-Object Name, Length
 
-      - name: Create draft release
+      - name: Upload to GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = "${{ needs.meta.outputs.version }}"
-          $tag = "${{ needs.meta.outputs.tag }}"
-          $notes = "docs/releases/$version.md"
-
-          $args = @($tag, "--draft", "--title", "FrameFlow $version")
-          if (Test-Path $notes) {
-            $args += @("--notes-file", $notes)
-          } else {
-            $args += "--generate-notes"
-          }
-
-          gh release create @args "frameflow-$version-win64.zip" "SHA256SUMS.txt"
+          $tag = "${{ needs.release-please.outputs.tag }}"
+          $version = "${{ needs.release-please.outputs.version }}"
+          gh release upload $tag "frameflow-$version-win64.zip" "SHA256SUMS.txt" --clobber
