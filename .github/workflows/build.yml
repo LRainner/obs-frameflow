@@ -69,9 +69,18 @@ jobs:
       - name: Locate libobs package
         run: |
           $config = Get-ChildItem -Path "$env:SDK_DIR/install" -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
-          if (-not $config) { throw "libobsConfig.cmake not found in cache" }
-          "OBS_INSTALL_DIR=$($config.Directory.Parent.Parent.Parent.FullName)" >> $env:GITHUB_ENV
-          Get-ChildItem "$($config.Directory.Parent.Parent.Parent.FullName)" | Select-Object Name
+          if (-not $config) { throw "libobsConfig.cmake not found" }
+
+          $prefix = $config.Directory
+          while ($prefix -and -not (Test-Path (Join-Path $prefix.FullName "include/obs.h"))) {
+            $prefix = $prefix.Parent
+          }
+          if (-not $prefix) { throw "Could not locate the libobs install prefix" }
+
+          "OBS_INSTALL_DIR=$($prefix.FullName)" >> $env:GITHUB_ENV
+          "LIBOBS_DIR=$($config.Directory.FullName)" >> $env:GITHUB_ENV
+          "libobs_DIR=$($config.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem $prefix.FullName | Select-Object Name
 
       - name: Configure FrameFlow
         run: |

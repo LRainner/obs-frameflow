@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.28)
 
-set(FRAMEFLOW_VERSION "0.1.0" CACHE STRING "Version embedded in the build")
+project(obs-frameflow VERSION 0.1.0 LANGUAGES C CXX)
 
-project(obs-frameflow VERSION ${FRAMEFLOW_VERSION} LANGUAGES C CXX)
+set(FRAMEFLOW_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Version string embedded in the build (may be a git tag or CI build id)")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
