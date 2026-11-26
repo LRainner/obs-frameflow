@@ -32,3 +32,6 @@ models/
 *.log
 .DS_Store
 Thumbs.db
+
+# OBS SDK built by CI
+.obs-sdk/
