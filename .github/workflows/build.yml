@@ -63,7 +63,7 @@ jobs:
             -DENABLE_PLUGINS:BOOL=OFF `
             -DENABLE_FRONTEND:BOOL=OFF
 
-          cmake --build "$env:SDK_DIR/build" --config RelWithDebInfo --target libobs --parallel
+          cmake --build "$env:SDK_DIR/build" --config RelWithDebInfo --target libobs obs-frontend-api --parallel
           cmake --install "$env:SDK_DIR/build" --component Development --config RelWithDebInfo --prefix "$env:SDK_DIR/install"
 
       - name: Locate libobs package
