@@ -1,0 +1,34 @@
+# Build output
+build/
+build_*/
+out/
+*.dll
+*.pdb
+*.lib
+*.exp
+*.obj
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeUserPresets.json
+
+# IDE
+.vs/
+.idea/
+.vscode/
+*.sln
+*.user
+
+# Dependencies / runtime
+deps/
+third_party/
+runtime/
+models/
+*.bin
+
+# Local
+*.log
+.DS_Store
+Thumbs.db
