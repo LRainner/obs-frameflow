@@ -202,7 +202,7 @@ bool enum_source(void *param, obs_source_t *source)
 {
 	auto *ctx = static_cast<SourceListContext *>(param);
 
-	if (source == ctx->self)
+	if (source == ctx->self->self)
 		return true;
 	if (!(obs_source_get_output_flags(source) & OBS_SOURCE_VIDEO))
 		return true;
@@ -347,7 +347,7 @@ obs_source_info build_info()
 	info.get_height = ff_get_height;
 	info.video_render = ff_render;
 
-	info.icon_type = OBS_ICON_TYPE_VIDEO_CAPTURE;
+	info.icon_type = OBS_ICON_TYPE_CAMERA;
 
 	return info;
 }
