@@ -4,6 +4,7 @@
 #include <util/bmem.h>
 
 #include <charconv>
+#include <mutex>
 #include <string_view>
 #include <unordered_set>
 
@@ -46,6 +47,12 @@ struct FrameFlowSource {
 
 	// Recursive render guard.
 	bool rendering = false;
+
+	// Whether the input is registered as an active child.
+	bool child_added = false;
+
+	// Guards input/child_added against the active-tree callback.
+	std::mutex input_mutex;
 };
 
 struct ContainsContext {
@@ -100,31 +107,69 @@ static bool contains_source(obs_source_t *haystack, obs_source_t *needle)
 
 static void release_input(FrameFlowSource *s)
 {
-	if (s->input) {
-		obs_source_release(s->input);
+	obs_source_t *old = nullptr;
+	bool registered = false;
+
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		old = s->input;
+		registered = s->child_added;
 		s->input = nullptr;
+		s->child_added = false;
 	}
+
+	if (!old)
+		return;
+
+	if (registered)
+		obs_source_remove_active_child(s->self, old);
+
+	obs_source_release(old);
 }
 
 static void set_input(FrameFlowSource *s, const char *name)
 {
-	release_input(s);
+	obs_source_t *next = nullptr;
 
-	if (!name || !*name)
-		return;
+	if (name && *name) {
+		next = obs_get_source_by_name(name);
+		if (next && (next == s->self || contains_source(next, s->self))) {
+			blog(LOG_WARNING,
+			     "[frameflow] refusing recursive input source '%s'",
+			     name);
+			obs_source_release(next);
+			next = nullptr;
+		}
+	}
 
-	obs_source_t *src = obs_get_source_by_name(name);
-	if (!src)
-		return;
-
-	if (src == s->self || contains_source(src, s->self)) {
-		blog(LOG_WARNING,
-		     "[frameflow] refusing recursive input source '%s'", name);
-		obs_source_release(src);
+	bool same;
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		same = next == s->input;
+	}
+	if (same) {
+		obs_source_release(next);
 		return;
 	}
 
-	s->input = src;
+	release_input(s);
+
+	if (!next)
+		return;
+
+	// add_active_child walks the candidate's tree to reject cycles; the
+	// candidate must not be reachable through us until that check passes.
+	if (!obs_source_add_active_child(s->self, next)) {
+		blog(LOG_WARNING, "[frameflow] could not activate input");
+		obs_source_release(next);
+		return;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		s->input = next;
+		s->child_added = true;
+	}
 }
 
 static bool parse_uint(std::string_view text, uint32_t &value)
@@ -362,10 +407,17 @@ void ff_render(void *data, gs_effect_t *)
 	if (!gs_texrender_begin(s->capture, width, height))
 		return;
 
+	// texrender inherits the canvas projection; override it for the input.
+	gs_ortho(0.0f, (float)width, 0.0f, (float)height, -100.0f, 100.0f);
+
 	const struct vec4 clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
 	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
 
+	gs_blend_state_push();
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
 	obs_source_video_render(s->input);
+	gs_blend_state_pop();
+
 	gs_texrender_end(s->capture);
 
 	gs_texture_t *texture = gs_texrender_get_texture(s->capture);
@@ -380,6 +432,28 @@ void ff_render(void *data, gs_effect_t *)
 	while (gs_effect_loop(s->draw, "Draw"))
 		gs_draw_sprite(texture, 0, s->out_width, s->out_height);
 	gs_blend_state_pop();
+}
+
+void ff_enum_active_sources(void *data, obs_source_enum_proc_t callback,
+			    void *param)
+{
+	auto *s = static_cast<FrameFlowSource *>(data);
+	if (!s)
+		return;
+
+	obs_source_t *input = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		input = s->input;
+		if (input)
+			obs_source_get_ref(input);
+	}
+
+	if (!input)
+		return;
+
+	callback(s->self, input, param);
+	obs_source_release(input);
 }
 
 obs_source_info build_info()
@@ -400,6 +474,7 @@ obs_source_info build_info()
 	info.get_width = ff_get_width;
 	info.get_height = ff_get_height;
 	info.video_render = ff_render;
+	info.enum_active_sources = ff_enum_active_sources;
 
 	info.icon_type = OBS_ICON_TYPE_CAMERA;
 
