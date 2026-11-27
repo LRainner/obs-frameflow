@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 
 # Version comes from version.txt (maintained by release-please).
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" _frameflow_version LIMIT_COUNT 1)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.txt" _frameflow_version LIMIT_COUNT 1)
 string(STRIP "${_frameflow_version}" _frameflow_version)
 if(NOT _frameflow_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
-  message(FATAL_ERROR "version.txt must hold a numeric semver, got '${_frameflow_version}'")
+  message(FATAL_ERROR "cmake/version.txt must hold a numeric semver, got '${_frameflow_version}'")
 endif()
 
 project(obs-frameflow VERSION ${_frameflow_version} LANGUAGES C CXX)

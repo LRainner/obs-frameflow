@@ -11,7 +11,7 @@
 [![OBS](https://img.shields.io/badge/OBS-30%2B-302E31)](https://obsproject.com)
 [![状态](https://img.shields.io/badge/%E7%8A%B6%E6%80%81-pre--alpha-orange)](docs/ROADMAP.md)
 
-[功能](#功能) · [安装](#安装) · [使用](#使用) · [环境要求](#环境要求) · [编译](#从源码编译) · [路线图](docs/ROADMAP.md)
+[功能](#功能) · [安装](#安装) · [使用](#使用) · [环境要求](#环境要求) · [编译](#从源码编译) · [文档](docs/README.md)
 
 </div>
 
@@ -56,7 +56,8 @@
 ## 从源码编译
 
 ```bat
-cmake --preset windows-x64
+cmake -S . -B build_x64 -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_PREFIX_PATH="%OBS_INSTALL_DIR%"
 cmake --build build_x64 --config RelWithDebInfo
 ```
 

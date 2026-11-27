@@ -7,8 +7,8 @@
     ".": {
       "release-type": "simple",
       "package-name": "frameflow",
-      "changelog-path": "CHANGELOG.md",
-      "version-file": "version.txt",
+      "changelog-path": "docs/CHANGELOG.md",
+      "version-file": "cmake/version.txt",
       "draft": true,
       "include-v-in-tag": true,
       "changelog-sections": [

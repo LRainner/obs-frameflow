@@ -2,12 +2,12 @@
 
 本项目使用 [release-please](https://github.com/googleapis/release-please) 驱动，
 配合 [Conventional Commits](https://www.conventionalcommits.org/) 自动生成
-`CHANGELOG.md`、版本号、Git tag 和 GitHub Release。
+`docs/CHANGELOG.md`、版本号、Git tag 和 GitHub Release。
 
 ## 版本号的唯一来源
 
-`version.txt` 由 release-please 维护，CMake 从它读取版本号。
-**不要手改** `version.txt`、`CHANGELOG.md` 或手动打 tag。
+`cmake/version.txt` 由 release-please 维护，CMake 从它读取版本号。
+**不要手改** `cmake/version.txt`、`docs/CHANGELOG.md` 或手动打 tag。
 
 ## 提交信息规范
 
@@ -33,7 +33,7 @@ feat!: drop OBS 29 support
 1. 功能分支合并进 `master`（建议 squash merge，保持线性历史）。
 2. `release` 工作流运行，release-please 打开/更新一个 PR：
    `chore(master): release X.Y.Z`。
-   该 PR 更新 `version.txt` 和 `CHANGELOG.md`。
+   该 PR 更新 `cmake/version.txt` 和 `docs/CHANGELOG.md`。
 3. 审阅这个 PR（版本号是否合理、changelog 分组是否正确）。
 4. 合并 PR。release-please 随即：
    - 创建 tag `vX.Y.Z`

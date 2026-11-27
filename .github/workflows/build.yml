@@ -91,12 +91,13 @@ jobs:
 
       - name: Configure FrameFlow
         run: |
-          cmake --preset windows-x64 `
+          cmake -S . -B build_x64 -G "Visual Studio 17 2022" -A x64 `
+            -Dlibobs_DIR="$env:LIBOBS_DIR" `
             -DFRAMEFLOW_VERSION="${{ inputs.version }}" `
             -DCMAKE_INSTALL_PREFIX="$env:PACKAGE_DIR"
 
       - name: Build FrameFlow
-        run: cmake --build --preset windows-x64
+        run: cmake --build build_x64 --config RelWithDebInfo
 
       - name: Stage plugin package
         run: |
