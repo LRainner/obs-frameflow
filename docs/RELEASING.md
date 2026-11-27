@@ -35,12 +35,15 @@ feat!: drop OBS 29 support
    `chore(master): release X.Y.Z`。
    该 PR 更新 `cmake/version.txt` 和 `docs/CHANGELOG.md`。
 3. 审阅这个 PR（版本号是否合理、changelog 分组是否正确）。
-4. 合并 PR。release-please 随即：
-   - 创建 tag `vX.Y.Z`
-   - 创建**草稿** Release，正文取自 changelog 对应小节
+4. 合并 PR。release-please 随即创建**草稿** Release，正文取自 changelog
+   对应小节。此时**还没有 tag**。
 5. 同一工作流继续执行：构建 Windows 产物 → 打包 → 生成 `SHA256SUMS.txt`
    → 通过 `gh release upload` 挂到该草稿 Release。
-6. 确认附件与说明无误后，在 GitHub 上点 **Publish release**。
+6. 附件齐全后，publish job 最后执行 `gh release edit --draft=false`：
+   发布 Release 并**同时创建 tag `vX.Y.Z`**。
+
+顺序很重要：release-please 靠 tag 判断上一版是否已发布。如果草稿一直不发布，
+下一轮就找不到基线，会把上一版的内容重新算进新的发布 PR。
 
 ## 补发附件
 
@@ -55,6 +58,9 @@ gh run list --workflow release.yml
 gh run rerun <run-id> --failed
 ```
 
+发布这一步是幂等的：Release 已经是正式状态时，`gh release edit --draft=false`
+不会产生额外改动。
+
 ## 手动触发
 
 `gh workflow run release.yml` 只会让 release-please 检查是否需要开/更新
@@ -68,11 +74,13 @@ gh run rerun <run-id> --failed
 ```
 frameflow-<version>-win64.zip
 └── frameflow/
-    ├── bin/64bit/frameflow.dll
-    ├── data/effects/frameflow.effect
-    ├── data/locale/{en-US,zh-CN}.ini
+    ├── frameflow.dll
+    ├── data/
+    │   ├── effects/frameflow.effect
+    │   └── locale/{en-US,zh-CN}.ini
     ├── LICENSE
     └── README.md
 ```
 
+这是 OBS 33 起的单层插件结构（`<plugin>.dll` 与 `data/` 并排）。
 解压到 `C:\ProgramData\obs-studio\plugins\` 即可。

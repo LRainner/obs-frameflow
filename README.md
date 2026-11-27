@@ -31,7 +31,8 @@
 ## 安装
 
 1. 从 [Releases](../../releases) 下载 `frameflow-<版本>-win64.zip`
-2. 解压到 `C:\ProgramData\obs-studio\plugins\`
+2. 把压缩包里的 `frameflow` 文件夹解压到 `C:\ProgramData\obs-studio\plugins\`
+   （目录不存在就新建）
 3. 重启 OBS
 
 ## 使用
@@ -42,7 +43,8 @@
 4. 完成 —— FrameFlow 源直接渲染增强后的画面
 
 > FrameFlow 是**源**，不是滤镜。它自己渲染你选中的那个源，
-> 所以它会替代原源出现在场景里 —— 两个不要同时添加。
+> 所以场景里只放 FrameFlow。被选中的源保留在「来源」列表即可，可以隐藏；
+> 如果列表里没有，先创建一个（例如「视频采集设备」）。
 
 ## 环境要求
 
