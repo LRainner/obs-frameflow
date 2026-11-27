@@ -69,6 +69,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no checkout, so gh cannot infer the repository.
+          GH_REPO: ${{ github.repository }}
         run: |
           $tag = "${{ needs.release-please.outputs.tag }}"
           $version = "${{ needs.release-please.outputs.version }}"
