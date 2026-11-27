@@ -102,9 +102,10 @@ jobs:
 
       - name: Stage portable layout
         run: |
+          # OBS 33 layout: <plugin>/<plugin>.dll beside <plugin>/data
           $stage = "dist/frameflow"
-          New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
-          Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/bin/64bit/"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/"
           Copy-Item -Recurse "package/obs-plugins/frameflow" "$stage/data"
           Copy-Item "LICENSE", "README.md" "$stage/"
           Get-ChildItem -Recurse dist | Select-Object FullName
