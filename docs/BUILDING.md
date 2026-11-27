@@ -16,7 +16,8 @@
 ## 配置与编译
 
 ```bat
-cmake --preset windows-x64
+cmake -S . -B build_x64 -G "Visual Studio 17 2022" -A x64 ^
+  -DCMAKE_PREFIX_PATH="%OBS_INSTALL_DIR%"
 cmake --build build_x64 --config RelWithDebInfo
 ```
 

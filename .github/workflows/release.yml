@@ -1,0 +1,86 @@
+name: release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
+  build:
+    name: Build release artefact
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+      ref: ${{ needs.release-please.outputs.sha }}
+
+  publish:
+    name: Attach binaries to release
+    needs: [release-please, build]
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
+
+      - name: Download plugin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frameflow-windows-x64
+          path: package
+
+      - name: Assemble release archive
+        shell: pwsh
+        run: |
+          $version = "${{ needs.release-please.outputs.version }}"
+          $stage = "release/frameflow"
+          New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
+
+          Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/bin/64bit/"
+          Copy-Item -Recurse "package/obs-plugins/frameflow" "$stage/data"
+          Copy-Item "LICENSE", "README.md" "$stage/"
+
+          $archive = "frameflow-$version-win64.zip"
+          Compress-Archive -Path $stage -DestinationPath $archive -Force
+
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash
+          "$hash  $archive" | Out-File -Encoding ascii SHA256SUMS.txt
+
+          Get-ChildItem $archive, SHA256SUMS.txt | Select-Object Name, Length
+
+      - name: Upload to GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ needs.release-please.outputs.tag }}"
+          $version = "${{ needs.release-please.outputs.version }}"
+          gh release upload $tag "frameflow-$version-win64.zip" "SHA256SUMS.txt" --clobber

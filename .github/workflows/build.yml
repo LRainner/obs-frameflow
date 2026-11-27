@@ -1,0 +1,114 @@
+name: build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version string embedded in the build
+        required: false
+        type: string
+        default: "0.1.0"
+      ref:
+        description: Commit to build (defaults to the triggering commit)
+        required: false
+        type: string
+        default: ""
+
+env:
+  OBS_VERSION: "31.1.1"
+  OBS_DEPS_VERSION: "2025-07-11"
+  SDK_DIR: ${{ github.workspace }}/.obs-sdk
+  PACKAGE_DIR: ${{ github.workspace }}/package
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache OBS SDK
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SDK_DIR }}/install
+          key: obs-sdk-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_VERSION }}
+
+      - name: Build OBS SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $deps = "$env:SDK_DIR/deps"
+          $src = "$env:SDK_DIR/src"
+          New-Item -ItemType Directory -Force -Path $deps, $src | Out-Null
+
+          $base = "https://github.com/obsproject/obs-deps/releases/download/$env:OBS_DEPS_VERSION"
+          Invoke-WebRequest "$base/windows-deps-$env:OBS_DEPS_VERSION-x64.zip" -OutFile "$env:SDK_DIR/deps.zip"
+          Expand-Archive "$env:SDK_DIR/deps.zip" -DestinationPath $deps -Force
+
+          Invoke-WebRequest "https://github.com/obsproject/obs-studio/archive/refs/tags/$env:OBS_VERSION.zip" -OutFile "$env:SDK_DIR/obs.zip"
+          Expand-Archive "$env:SDK_DIR/obs.zip" -DestinationPath $src -Force
+
+          $obsSrc = "$src/obs-studio-$env:OBS_VERSION"
+          $prefix = (Get-ChildItem $deps -Directory | Select-Object -ExpandProperty FullName) -join ";"
+
+          cmake -S $obsSrc -B "$env:SDK_DIR/build" -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="$prefix" `
+            -DOBS_CMAKE_VERSION:STRING=3.0.0 `
+            -DOBS_VERSION_OVERRIDE:STRING=$env:OBS_VERSION `
+            -DENABLE_PLUGINS:BOOL=OFF `
+            -DENABLE_FRONTEND:BOOL=OFF
+
+          cmake --build "$env:SDK_DIR/build" --config RelWithDebInfo --target libobs obs-frontend-api --parallel
+          cmake --install "$env:SDK_DIR/build" --component Development --config RelWithDebInfo --prefix "$env:SDK_DIR/install"
+
+      - name: Locate libobs package
+        run: |
+          $config = Get-ChildItem -Path "$env:SDK_DIR/install" -Recurse -Filter "libobsConfig.cmake" | Select-Object -First 1
+          if (-not $config) { throw "libobsConfig.cmake not found" }
+
+          $prefix = $config.Directory
+          while ($prefix -and -not (Test-Path (Join-Path $prefix.FullName "include/obs.h"))) {
+            $prefix = $prefix.Parent
+          }
+          if (-not $prefix) { throw "Could not locate the libobs install prefix" }
+
+          "OBS_INSTALL_DIR=$($prefix.FullName)" >> $env:GITHUB_ENV
+          "LIBOBS_DIR=$($config.Directory.FullName)" >> $env:GITHUB_ENV
+          "libobs_DIR=$($config.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Get-ChildItem $prefix.FullName | Select-Object Name
+
+      - name: Configure FrameFlow
+        run: |
+          cmake -S . -B build_x64 -G "Visual Studio 17 2022" -A x64 `
+            -Dlibobs_DIR="$env:LIBOBS_DIR" `
+            -DCMAKE_PREFIX_PATH="$env:OBS_INSTALL_DIR" `
+            -DFRAMEFLOW_VERSION="${{ inputs.version }}" `
+            -DCMAKE_INSTALL_PREFIX="$env:PACKAGE_DIR"
+
+      - name: Build FrameFlow
+        run: cmake --build build_x64 --config RelWithDebInfo
+
+      - name: Stage plugin package
+        run: |
+          cmake --install build_x64 --config RelWithDebInfo
+          Get-ChildItem -Recurse "$env:PACKAGE_DIR" | Select-Object FullName
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frameflow-windows-x64
+          path: ${{ env.PACKAGE_DIR }}
+          if-no-files-found: error
+          retention-days: 14
