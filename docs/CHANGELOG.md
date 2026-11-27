@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/LRainner/obs-frameflow/compare/v0.1.0...v0.2.0) (2026-11-27)
+
+
+### Features
+
+* color-space-correct rendering and a Lanczos upscale stage ([#15](https://github.com/LRainner/obs-frameflow/issues/15)) ([9afd827](https://github.com/LRainner/obs-frameflow/commit/9afd8278f70c14171d5d2e9d3796bf42fac12569))
+
 ## [0.1.0](https://github.com/LRainner/obs-frameflow/compare/v0.1.0...v0.1.0) (2026-11-27)
 
 
