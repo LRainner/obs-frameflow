@@ -239,8 +239,6 @@ void ff_destroy(void *data)
 	obs_enter_graphics();
 	if (s->capture)
 		gs_texrender_destroy(s->capture);
-	if (s->draw)
-		gs_effect_destroy(s->draw);
 	obs_leave_graphics();
 
 	delete s;
