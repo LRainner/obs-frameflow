@@ -76,7 +76,6 @@ frameflow-<version>-win64.zip
 └── frameflow/
     ├── frameflow.dll
     ├── data/
-    │   ├── effects/frameflow.effect
     │   └── locale/{en-US,zh-CN}.ini
     ├── LICENSE
     └── README.md

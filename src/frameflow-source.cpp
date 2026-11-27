@@ -37,11 +37,6 @@ struct FrameFlowSource {
 	uint32_t out_height = kDefaultHeight;
 
 	gs_texrender_t *capture = nullptr;
-	uint32_t capture_width = 0;
-	uint32_t capture_height = 0;
-
-	gs_effect_t *draw = nullptr;
-	gs_eparam_t *image_param = nullptr;
 
 	bool show_original = false;
 
@@ -329,49 +324,17 @@ obs_properties_t *ff_get_properties(void *data)
 	return props;
 }
 
-static bool ensure_resources(FrameFlowSource *s, uint32_t width,
-			     uint32_t height)
+static bool ensure_resources(FrameFlowSource *s, gs_color_format format)
 {
-	if (!s->draw) {
-		char *path = obs_module_file("effects/frameflow.effect");
-		if (!path)
-			return false;
-
-		char *error = nullptr;
-		s->draw = gs_effect_create_from_file(path, &error);
-		bfree(path);
-
-		if (!s->draw) {
-			blog(LOG_ERROR, "[frameflow] failed to load effect: %s",
-			     error ? error : "unknown error");
-			bfree(error);
-			return false;
-		}
-
-		s->image_param = gs_effect_get_param_by_name(s->draw, "image");
-		if (!s->image_param) {
-			gs_effect_destroy(s->draw);
-			s->draw = nullptr;
-			return false;
-		}
+	if (s->capture && gs_texrender_get_format(s->capture) != format) {
+		gs_texrender_destroy(s->capture);
+		s->capture = nullptr;
 	}
 
-	if (!s->capture || s->capture_width != width ||
-	    s->capture_height != height) {
-		if (s->capture) {
-			gs_texrender_destroy(s->capture);
-			s->capture = nullptr;
-		}
+	if (!s->capture)
+		s->capture = gs_texrender_create(format, GS_ZS_NONE);
 
-		s->capture = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
-		if (!s->capture)
-			return false;
-
-		s->capture_width = width;
-		s->capture_height = height;
-	}
-
-	return true;
+	return s->capture != nullptr;
 }
 
 // Clears the render flag on scope exit.
@@ -380,6 +343,60 @@ struct RenderGuard {
 	explicit RenderGuard(bool &value) : flag(value) { flag = true; }
 	~RenderGuard() { flag = false; }
 };
+
+static enum gs_color_space input_color_space(obs_source_t *input)
+{
+	static const enum gs_color_space preferred[] = {
+		GS_CS_SRGB,
+		GS_CS_SRGB_16F,
+		GS_CS_709_EXTENDED,
+		GS_CS_709_SCRGB,
+	};
+
+	return obs_source_get_color_space(input, 4, preferred);
+}
+
+// Picks the default-effect technique that converts the input space to the
+// current one, mirroring source_render() in libobs.
+static const char *draw_technique(gs_effect_t *effect,
+				  enum gs_color_space source_space,
+				  enum gs_color_space current_space,
+				  float *multiplier)
+{
+	const char *name = "Draw";
+	*multiplier = 1.0f;
+
+	switch (source_space) {
+	case GS_CS_SRGB:
+	case GS_CS_SRGB_16F:
+		if (current_space == GS_CS_709_SCRGB) {
+			name = "DrawMultiply";
+			*multiplier = obs_get_video_sdr_white_level() / 80.0f;
+		}
+		break;
+	case GS_CS_709_EXTENDED:
+		if (current_space == GS_CS_SRGB ||
+		    current_space == GS_CS_SRGB_16F)
+			name = "DrawTonemap";
+		else if (current_space == GS_CS_709_SCRGB) {
+			name = "DrawMultiply";
+			*multiplier = obs_get_video_sdr_white_level() / 80.0f;
+		}
+		break;
+	case GS_CS_709_SCRGB:
+		if (current_space == GS_CS_SRGB ||
+		    current_space == GS_CS_SRGB_16F) {
+			name = "DrawMultiplyTonemap";
+			*multiplier = 80.0f / obs_get_video_sdr_white_level();
+		} else if (current_space == GS_CS_709_EXTENDED) {
+			name = "DrawMultiply";
+			*multiplier = 80.0f / obs_get_video_sdr_white_level();
+		}
+		break;
+	}
+
+	return gs_effect_get_technique(effect, name) ? name : "Draw";
+}
 
 void ff_render(void *data, gs_effect_t *)
 {
@@ -397,14 +414,17 @@ void ff_render(void *data, gs_effect_t *)
 	if (!width || !height)
 		return;
 
-	if (!ensure_resources(s, width, height))
+	const enum gs_color_space source_space = input_color_space(s->input);
+	const enum gs_color_format format = gs_get_format_from_space(source_space);
+	if (!ensure_resources(s, format))
 		return;
 
 	RenderGuard guard(s->rendering);
 
 	// begin() refuses an already-rendered texrender.
 	gs_texrender_reset(s->capture);
-	if (!gs_texrender_begin(s->capture, width, height))
+	if (!gs_texrender_begin_with_color_space(s->capture, width, height,
+						 source_space))
 		return;
 
 	// texrender inherits the canvas projection; override it for the input.
@@ -424,14 +444,58 @@ void ff_render(void *data, gs_effect_t *)
 	if (!texture)
 		return;
 
-	// TODO(P2): upscale before drawing.
-	gs_effect_set_texture(s->image_param, texture);
+	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+	gs_eparam_t *multiplier_param =
+		gs_effect_get_param_by_name(effect, "multiplier");
+
+	const enum gs_color_space current_space = gs_get_color_space();
+	float multiplier;
+	const char *tech = draw_technique(effect, source_space, current_space,
+					  &multiplier);
+
+	// 16F textures are linear, so sRGB sampling is a no-op there.
+	const bool linear = source_space != GS_CS_SRGB || gs_get_linear_srgb();
+	const bool previous_srgb = gs_framebuffer_srgb_enabled();
+	gs_enable_framebuffer_srgb(linear);
+	if (linear)
+		gs_effect_set_texture_srgb(image, texture);
+	else
+		gs_effect_set_texture(image, texture);
+	if (multiplier_param)
+		gs_effect_set_float(multiplier_param, multiplier);
 
 	gs_blend_state_push();
 	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
-	while (gs_effect_loop(s->draw, "Draw"))
+	while (gs_effect_loop(effect, tech))
 		gs_draw_sprite(texture, 0, s->out_width, s->out_height);
 	gs_blend_state_pop();
+
+	gs_enable_framebuffer_srgb(previous_srgb);
+}
+
+enum gs_color_space ff_video_get_color_space(void *data, size_t count,
+					     const enum gs_color_space *preferred)
+{
+	auto *s = static_cast<FrameFlowSource *>(data);
+	if (!s)
+		return GS_CS_SRGB;
+
+	obs_source_t *input = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		input = s->input;
+		if (input)
+			obs_source_get_ref(input);
+	}
+
+	if (!input)
+		return GS_CS_SRGB;
+
+	const enum gs_color_space space =
+		obs_source_get_color_space(input, count, preferred);
+	obs_source_release(input);
+	return space;
 }
 
 void ff_enum_active_sources(void *data, obs_source_enum_proc_t callback,
@@ -474,6 +538,7 @@ obs_source_info build_info()
 	info.get_width = ff_get_width;
 	info.get_height = ff_get_height;
 	info.video_render = ff_render;
+	info.video_get_color_space = ff_video_get_color_space;
 	info.enum_active_sources = ff_enum_active_sources;
 
 	info.icon_type = OBS_ICON_TYPE_CAMERA;
