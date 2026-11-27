@@ -42,16 +42,26 @@ feat!: drop OBS 29 support
    → 通过 `gh release upload` 挂到该草稿 Release。
 6. 确认附件与说明无误后，在 GitHub 上点 **Publish release**。
 
-## 手工补发
+## 补发附件
 
-如果需要在没有新提交的情况下重跑：
+构建或上传失败时，不要重新 dispatch 工作流：release-please 已经把发布 PR 的
+`autorelease: pending` 标签摘掉，重跑不会再有 `release_created=true`，
+`build` 和 `publish` 会被直接跳过。
+
+正确做法是重跑**原运行中失败的作业**，保留 release-please 的输出：
 
 ```
-gh workflow run release.yml
+gh run list --workflow release.yml
+gh run rerun <run-id> --failed
 ```
 
-或推送一个符合 semver 的 tag（例如 `v0.2.0`），但**不推荐**——会绕过
-release-please 对 `version.txt` 的维护。
+## 手动触发
+
+`gh workflow run release.yml` 只会让 release-please 检查是否需要开/更新
+发布 PR，不会构建二进制。
+
+推送 tag **不会**触发任何工作流——tag 只由 release-please 创建，构建发生在
+同一次 release 运行内。
 
 ## 产物结构
 

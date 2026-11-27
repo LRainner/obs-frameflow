@@ -22,6 +22,7 @@ jobs:
       released: ${{ steps.release.outputs.release_created }}
       tag: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - name: Run release-please
         id: release
@@ -37,6 +38,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.release-please.outputs.version }}
+      ref: ${{ needs.release-please.outputs.sha }}
 
   publish:
     name: Attach binaries to release
@@ -46,6 +48,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.sha || github.sha }}
 
       - name: Download plugin artifact
         uses: actions/download-artifact@v4
@@ -61,7 +65,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$stage/bin/64bit" | Out-Null
 
           Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/bin/64bit/"
-          # install(DIRECTORY data/) flattens effects/ and locale/ into the plugin dir
           Copy-Item -Recurse "package/obs-plugins/frameflow" "$stage/data"
           Copy-Item "LICENSE", "README.md" "$stage/"
 

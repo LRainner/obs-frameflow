@@ -4,6 +4,7 @@
 #include <util/bmem.h>
 
 #include <cstdio>
+#include <unordered_set>
 
 namespace {
 
@@ -29,7 +30,6 @@ const ResolutionPreset kResolutions[] = {
 struct FrameFlowSource {
 	obs_source_t *self = nullptr;
 	obs_source_t *input = nullptr;
-	obs_weak_source_t *input_weak = nullptr;
 
 	uint32_t out_width = kDefaultWidth;
 	uint32_t out_height = kDefaultHeight;
@@ -42,56 +42,72 @@ struct FrameFlowSource {
 	gs_eparam_t *image_param = nullptr;
 
 	bool show_original = false;
-};
 
-static bool contains_source(obs_source_t *haystack, obs_source_t *needle, int depth);
+	// Recursive render guard.
+	bool rendering = false;
+};
 
 struct ContainsContext {
 	obs_source_t *needle;
 	int depth;
 	bool found;
+	std::unordered_set<obs_source_t *> *visited;
 };
 
-static bool contains_item(obs_scene_t *, obs_sceneitem_t *item, void *param)
-{
-	auto *ctx = static_cast<ContainsContext *>(param);
-	obs_source_t *child = obs_sceneitem_get_source(item);
-
-	if (child == ctx->needle ||
-	    contains_source(child, ctx->needle, ctx->depth + 1)) {
-		ctx->found = true;
-		return false;
-	}
-	return true;
-}
-
-static bool contains_source(obs_source_t *haystack, obs_source_t *needle,
-			    int depth)
+static bool contains_source_impl(obs_source_t *haystack, obs_source_t *needle,
+				 int depth,
+				 std::unordered_set<obs_source_t *> &visited)
 {
 	if (!haystack || !needle || depth > kMaxSceneDepth)
 		return false;
 	if (haystack == needle)
 		return true;
 
+	// Visit each scene once.
+	if (!visited.insert(haystack).second)
+		return false;
+
 	obs_scene_t *scene = obs_scene_from_source(haystack);
 	if (!scene)
 		return false;
 
-	ContainsContext ctx{needle, depth, false};
-	obs_scene_enum_items(scene, contains_item, &ctx);
+	ContainsContext ctx{needle, depth, false, &visited};
+
+	obs_scene_enum_items(
+		scene,
+		[](obs_scene_t *, obs_sceneitem_t *item, void *param) {
+			auto *c = static_cast<ContainsContext *>(param);
+			obs_source_t *child = obs_sceneitem_get_source(item);
+			if (child == c->needle ||
+			    contains_source_impl(child, c->needle, c->depth + 1,
+						 *c->visited)) {
+				c->found = true;
+				return false;
+			}
+			return true;
+		},
+		&ctx);
+
 	return ctx.found;
 }
 
-static void set_input(FrameFlowSource *s, const char *name)
+static bool contains_source(obs_source_t *haystack, obs_source_t *needle)
+{
+	std::unordered_set<obs_source_t *> visited;
+	return contains_source_impl(haystack, needle, 0, visited);
+}
+
+static void release_input(FrameFlowSource *s)
 {
 	if (s->input) {
 		obs_source_release(s->input);
 		s->input = nullptr;
 	}
-	if (s->input_weak) {
-		obs_weak_source_release(s->input_weak);
-		s->input_weak = nullptr;
-	}
+}
+
+static void set_input(FrameFlowSource *s, const char *name)
+{
+	release_input(s);
 
 	if (!name || !*name)
 		return;
@@ -100,7 +116,7 @@ static void set_input(FrameFlowSource *s, const char *name)
 	if (!src)
 		return;
 
-	if (src == s->self || contains_source(src, s->self, 0)) {
+	if (src == s->self || contains_source(src, s->self)) {
 		blog(LOG_WARNING,
 		     "[frameflow] refusing recursive input source '%s'", name);
 		obs_source_release(src);
@@ -108,7 +124,6 @@ static void set_input(FrameFlowSource *s, const char *name)
 	}
 
 	s->input = src;
-	s->input_weak = obs_source_get_weak_source(src);
 }
 
 static void parse_resolution(const char *value, uint32_t *width,
@@ -156,10 +171,7 @@ void ff_destroy(void *data)
 	if (!s)
 		return;
 
-	if (s->input)
-		obs_source_release(s->input);
-	if (s->input_weak)
-		obs_weak_source_release(s->input_weak);
+	release_input(s);
 
 	obs_enter_graphics();
 	if (s->capture)
@@ -206,7 +218,7 @@ bool enum_source(void *param, obs_source_t *source)
 		return true;
 	if (!(obs_source_get_output_flags(source) & OBS_SOURCE_VIDEO))
 		return true;
-	if (contains_source(source, ctx->self->self, 0))
+	if (contains_source(source, ctx->self->self))
 		return true;
 
 	const char *name = obs_source_get_name(source);
@@ -294,11 +306,23 @@ static bool ensure_resources(FrameFlowSource *s, uint32_t width,
 	return true;
 }
 
+// Clears the render flag on scope exit.
+struct RenderGuard {
+	bool &flag;
+	explicit RenderGuard(bool &value) : flag(value) { flag = true; }
+	~RenderGuard() { flag = false; }
+};
+
 void ff_render(void *data, gs_effect_t *)
 {
 	auto *s = static_cast<FrameFlowSource *>(data);
-	if (!s || !s->input)
+	if (!s || !s->input || s->rendering)
 		return;
+
+	if (obs_source_removed(s->input)) {
+		release_input(s);
+		return;
+	}
 
 	const uint32_t width = obs_source_get_width(s->input);
 	const uint32_t height = obs_source_get_height(s->input);
@@ -308,7 +332,16 @@ void ff_render(void *data, gs_effect_t *)
 	if (!ensure_resources(s, width, height))
 		return;
 
-	gs_texrender_begin(s->capture, width, height);
+	RenderGuard guard(s->rendering);
+
+	// begin() refuses an already-rendered texrender.
+	gs_texrender_reset(s->capture);
+	if (!gs_texrender_begin(s->capture, width, height))
+		return;
+
+	const struct vec4 clear_color = {0.0f, 0.0f, 0.0f, 0.0f};
+	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+
 	obs_source_video_render(s->input);
 	gs_texrender_end(s->capture);
 
@@ -316,7 +349,7 @@ void ff_render(void *data, gs_effect_t *)
 	if (!texture)
 		return;
 
-	// P1: pass-through. P2 will run the upscaler here before drawing.
+	// TODO(P2): upscale before drawing.
 	gs_effect_set_texture(s->image_param, texture);
 
 	gs_blend_state_push();
@@ -324,8 +357,6 @@ void ff_render(void *data, gs_effect_t *)
 	while (gs_effect_loop(s->draw, "Draw"))
 		gs_draw_sprite(texture, 0, s->out_width, s->out_height);
 	gs_blend_state_pop();
-
-	(void)s->show_original;
 }
 
 obs_source_info build_info()

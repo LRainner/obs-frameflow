@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-# version.txt is owned by release-please, so it is the single source of truth.
+# Version comes from version.txt (maintained by release-please).
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" _frameflow_version LIMIT_COUNT 1)
 string(STRIP "${_frameflow_version}" _frameflow_version)
 if(NOT _frameflow_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
@@ -18,10 +18,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(FRAMEFLOW_WERROR "Treat compiler warnings as errors" OFF)
 
-# Match the RelWithDebInfo build against a Release libobs install.
+# Build RelWithDebInfo against a Release libobs.
 set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO RelWithDebInfo Release MinSizeRel None "")
 
-# libobs is provided by the OBS build / install tree.
 find_package(libobs REQUIRED)
 
 configure_file(
