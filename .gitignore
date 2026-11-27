@@ -35,3 +35,6 @@ Thumbs.db
 
 # OBS SDK built by CI
 .obs-sdk/
+
+# local SDK and test artifacts
+.tmp/

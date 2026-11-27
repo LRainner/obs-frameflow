@@ -1,4 +1,4 @@
-#include "frameflow-source.hpp"
+﻿#include "frameflow-source.hpp"
 
 #include <graphics/graphics.h>
 #include <util/bmem.h>
@@ -53,6 +53,12 @@ struct FrameFlowSource {
 
 	// Guards input/child_added against the active-tree callback.
 	std::mutex input_mutex;
+
+	// Diagnostics.
+	uint64_t frame_count = 0;
+	uint64_t zero_size_count = 0;
+	uint64_t begin_fail_count = 0;
+	uint64_t upscale_fail_count = 0;
 };
 
 struct ContainsContext {
@@ -458,8 +464,16 @@ void ff_render(void *data, gs_effect_t *)
 
 	const uint32_t width = obs_source_get_width(s->input);
 	const uint32_t height = obs_source_get_height(s->input);
-	if (!width || !height)
+	if (!width || !height) {
+		++s->zero_size_count;
+		if ((s->frame_count % 240) == 0)
+			blog(LOG_WARNING,
+			     "[frameflow] input '%s' has no size (frames=%llu zero=%llu)",
+			     obs_source_get_name(s->input),
+			     (unsigned long long)s->frame_count,
+			     (unsigned long long)s->zero_size_count);
 		return;
+	}
 
 	const enum gs_color_space source_space = input_color_space(s->input);
 	const enum gs_color_format format = gs_get_format_from_space(source_space);
@@ -493,7 +507,8 @@ void ff_render(void *data, gs_effect_t *)
 
 	// Lanczos pass into the output resolution. The final draw below still
 	// goes through the color-space conversion table.
-	if (s->scale && s->upscaled) {
+	bool used_upscale = false;
+	if (!s->show_original && s->scale && s->upscaled) {
 		gs_texrender_reset(s->upscaled);
 		if (gs_texrender_begin_with_color_space(s->upscaled,
 							s->out_width,
@@ -518,10 +533,18 @@ void ff_render(void *data, gs_effect_t *)
 
 			gs_texture_t *scaled =
 				gs_texrender_get_texture(s->upscaled);
-			if (scaled)
+			if (scaled) {
 				texture = scaled;
+				used_upscale = true;
+			}
 		} else {
+			++s->upscale_fail_count;
 			gs_texrender_reset(s->upscaled);
+			if ((s->frame_count % 240) == 0)
+				blog(LOG_WARNING,
+				     "[frameflow] upscale begin failed (frames=%llu fails=%llu)",
+				     (unsigned long long)s->frame_count,
+				     (unsigned long long)s->upscale_fail_count);
 		}
 	}
 
@@ -553,6 +576,19 @@ void ff_render(void *data, gs_effect_t *)
 	gs_blend_state_pop();
 
 	gs_enable_framebuffer_srgb(previous_srgb);
+
+	++s->frame_count;
+	if ((s->frame_count % 240) == 0)
+		blog(LOG_INFO,
+		     "[frameflow] frames=%llu input='%s' %ux%u space=%d format=%d upscale=%d out=%ux%u srgb=%d linear=%d current=%d zero=%llu beginfail=%llu upscalefail=%llu",
+		     (unsigned long long)s->frame_count,
+		     obs_source_get_name(s->input), width, height,
+		     (int)source_space, (int)format, used_upscale ? 1 : 0,
+		     s->out_width, s->out_height, previous_srgb ? 1 : 0,
+		     linear ? 1 : 0, (int)current_space,
+		     (unsigned long long)s->zero_size_count,
+		     (unsigned long long)s->begin_fail_count,
+		     (unsigned long long)s->upscale_fail_count);
 }
 
 enum gs_color_space ff_video_get_color_space(void *data, size_t count,
