@@ -29,18 +29,13 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
 
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
       - name: Cache OBS SDK
         id: sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.SDK_DIR }}/install
           key: obs-sdk-${{ env.OBS_VERSION }}-${{ env.OBS_DEPS_VERSION }}
@@ -106,7 +101,7 @@ jobs:
           Get-ChildItem -Recurse "$env:PACKAGE_DIR" | Select-Object FullName
 
       - name: Upload plugin artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frameflow-windows-x64
           path: ${{ env.PACKAGE_DIR }}

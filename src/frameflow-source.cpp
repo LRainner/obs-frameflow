@@ -3,7 +3,8 @@
 #include <graphics/graphics.h>
 #include <util/bmem.h>
 
-#include <cstdio>
+#include <charconv>
+#include <string_view>
 #include <unordered_set>
 
 namespace {
@@ -126,18 +127,40 @@ static void set_input(FrameFlowSource *s, const char *name)
 	s->input = src;
 }
 
+static bool parse_uint(std::string_view text, uint32_t &value)
+{
+	if (text.empty())
+		return false;
+
+	uint32_t parsed = 0;
+	const auto result =
+		std::from_chars(text.data(), text.data() + text.size(), parsed);
+	if (result.ec != std::errc{} ||
+	    result.ptr != text.data() + text.size())
+		return false;
+
+	value = parsed;
+	return true;
+}
+
 static void parse_resolution(const char *value, uint32_t *width,
 			     uint32_t *height)
 {
-	unsigned int w = 0;
-	unsigned int h = 0;
+	std::string_view text(value ? value : "");
 
-	if (value && std::sscanf(value, "%ux%u", &w, &h) == 2 &&
-	    w >= kMinDimension && h >= kMinDimension && w <= kMaxDimension &&
-	    h <= kMaxDimension) {
-		*width = w;
-		*height = h;
-		return;
+	const size_t separator = text.find('x');
+	if (separator != std::string_view::npos) {
+		uint32_t w = 0;
+		uint32_t h = 0;
+
+		if (parse_uint(text.substr(0, separator), w) &&
+		    parse_uint(text.substr(separator + 1), h) &&
+		    w >= kMinDimension && h >= kMinDimension &&
+		    w <= kMaxDimension && h <= kMaxDimension) {
+			*width = w;
+			*height = h;
+			return;
+		}
 	}
 
 	*width = kDefaultWidth;
