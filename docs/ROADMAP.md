@@ -53,10 +53,11 @@ DLSS 4 SR（**在视频上比 bicubic 还差**，它需要引擎提供的运动�
 
 ### P2 —— 超分辨率（1 周）
 
+- [x] 色彩空间管线：源空间 → texrender → 输出转换
+- [x] GPU Lanczos 超分（Maxine 不可用时的降级路径）
 - [ ] 接入 Maxine VSR（质量档位）
-- [ ] 色彩管线：BT.709 limited/full，显式处理
 - [ ] 「验证生效」按钮（检测静默失效）
-- [ ] VSR 不可用时降级到 bicubic
+- [x] VSR 不可用时降级到 shader 缩放
 
 **验收：** 相对 bicubic 的 PSNR 提升 ≥2dB；整体 ≤90ms。
 

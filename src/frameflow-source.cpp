@@ -37,6 +37,11 @@ struct FrameFlowSource {
 	uint32_t out_height = kDefaultHeight;
 
 	gs_texrender_t *capture = nullptr;
+	gs_texrender_t *upscaled = nullptr;
+
+	gs_effect_t *scale = nullptr;
+	gs_eparam_t *scale_image = nullptr;
+	gs_eparam_t *scale_size = nullptr;
 
 	bool show_original = false;
 
@@ -239,6 +244,10 @@ void ff_destroy(void *data)
 	obs_enter_graphics();
 	if (s->capture)
 		gs_texrender_destroy(s->capture);
+	if (s->upscaled)
+		gs_texrender_destroy(s->upscaled);
+	if (s->scale)
+		gs_effect_destroy(s->scale);
 	obs_leave_graphics();
 
 	delete s;
@@ -322,17 +331,57 @@ obs_properties_t *ff_get_properties(void *data)
 	return props;
 }
 
-static bool ensure_resources(FrameFlowSource *s, gs_color_format format)
+static gs_texrender_t *resolve_texrender(gs_texrender_t *texrender,
+					 gs_color_format format)
 {
-	if (s->capture && gs_texrender_get_format(s->capture) != format) {
-		gs_texrender_destroy(s->capture);
-		s->capture = nullptr;
+	if (texrender && gs_texrender_get_format(texrender) != format) {
+		gs_texrender_destroy(texrender);
+		texrender = nullptr;
 	}
 
-	if (!s->capture)
-		s->capture = gs_texrender_create(format, GS_ZS_NONE);
+	if (!texrender)
+		texrender = gs_texrender_create(format, GS_ZS_NONE);
 
-	return s->capture != nullptr;
+	return texrender;
+}
+
+static bool ensure_scale_effect(FrameFlowSource *s)
+{
+	if (s->scale)
+		return true;
+
+	char *path = obs_module_file("effects/frameflow.effect");
+	if (!path)
+		return false;
+
+	char *error = nullptr;
+	s->scale = gs_effect_create_from_file(path, &error);
+	bfree(path);
+
+	if (!s->scale) {
+		blog(LOG_ERROR, "[frameflow] failed to load scale effect: %s",
+		     error ? error : "unknown error");
+		bfree(error);
+		return false;
+	}
+
+	s->scale_image = gs_effect_get_param_by_name(s->scale, "image");
+	s->scale_size = gs_effect_get_param_by_name(s->scale, "source_size");
+	return s->scale_image && s->scale_size;
+}
+
+static bool ensure_resources(FrameFlowSource *s, gs_color_format format)
+{
+	s->capture = resolve_texrender(s->capture, format);
+	if (!s->capture)
+		return false;
+
+	// The upscaler is optional: without it the capture texture is drawn
+	// directly, which still renders correctly.
+	if (ensure_scale_effect(s))
+		s->upscaled = resolve_texrender(s->upscaled, format);
+
+	return true;
 }
 
 // Clears the render flag on scope exit.
@@ -441,6 +490,40 @@ void ff_render(void *data, gs_effect_t *)
 	gs_texture_t *texture = gs_texrender_get_texture(s->capture);
 	if (!texture)
 		return;
+
+	// Lanczos pass into the output resolution. The final draw below still
+	// goes through the color-space conversion table.
+	if (s->scale && s->upscaled) {
+		gs_texrender_reset(s->upscaled);
+		if (gs_texrender_begin_with_color_space(s->upscaled,
+							s->out_width,
+							s->out_height,
+							source_space)) {
+			gs_ortho(0.0f, (float)s->out_width, 0.0f,
+				 (float)s->out_height, -100.0f, 100.0f);
+			gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+
+			struct vec2 input_size = {(float)width, (float)height};
+			gs_effect_set_texture(s->scale_image, texture);
+			gs_effect_set_vec2(s->scale_size, &input_size);
+
+			gs_blend_state_push();
+			gs_blend_function(GS_BLEND_ONE, GS_BLEND_ZERO);
+			while (gs_effect_loop(s->scale, "Draw"))
+				gs_draw_sprite(texture, 0, s->out_width,
+					       s->out_height);
+			gs_blend_state_pop();
+
+			gs_texrender_end(s->upscaled);
+
+			gs_texture_t *scaled =
+				gs_texrender_get_texture(s->upscaled);
+			if (scaled)
+				texture = scaled;
+		} else {
+			gs_texrender_reset(s->upscaled);
+		}
+	}
 
 	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");

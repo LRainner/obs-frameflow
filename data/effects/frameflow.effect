@@ -1,0 +1,172 @@
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 source_size;
+
+sampler_state def_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertInOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertInOut VSDefault(VertInOut vert_in)
+{
+	VertInOut vert_out;
+	vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = vert_in.uv;
+	return vert_out;
+}
+
+float lanczos3(float x)
+{
+	const float pi = 3.14159265358979323846;
+	x = abs(x);
+	if (x < 0.00001)
+		return 1.0;
+	if (x >= 3.0)
+		return 0.0;
+	float px = pi * x;
+	return (sin(px) / px) * (sin(px / 3.0) / (px / 3.0));
+}
+
+float4 PSLanczos(VertInOut vert_in) : TARGET
+{
+	float2 uv = vert_in.uv;
+	float2 texel = 1.0 / source_size;
+	float2 src = uv * source_size - 0.5;
+	float2 f = src - floor(src);
+
+	float4 sum = 0.0;
+	float wsum = 0.0;
+	float w;
+
+	float wy0 = lanczos3(-2.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy0;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, -2.0) - f) * texel) * w;
+	wsum += w;
+	float wy1 = lanczos3(-1.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy1;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, -1.0) - f) * texel) * w;
+	wsum += w;
+	float wy2 = lanczos3(0.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy2;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, 0.0) - f) * texel) * w;
+	wsum += w;
+	float wy3 = lanczos3(1.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy3;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, 1.0) - f) * texel) * w;
+	wsum += w;
+	float wy4 = lanczos3(2.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy4;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, 2.0) - f) * texel) * w;
+	wsum += w;
+	float wy5 = lanczos3(3.0 - f.y);
+	w = lanczos3(-2.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(-2.0, 3.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(-1.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(-1.0, 3.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(0.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(0.0, 3.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(1.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(1.0, 3.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(2.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(2.0, 3.0) - f) * texel) * w;
+	wsum += w;
+	w = lanczos3(3.0 - f.x) * wy5;
+	sum += image.Sample(def_sampler, uv + (float2(3.0, 3.0) - f) * texel) * w;
+	wsum += w;
+
+	return sum / wsum;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(vert_in);
+		pixel_shader  = PSLanczos(vert_in);
+	}
+}
