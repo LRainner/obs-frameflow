@@ -95,15 +95,25 @@ jobs:
       - name: Build FrameFlow
         run: cmake --build build_x64 --config RelWithDebInfo
 
-      - name: Stage plugin package
+      - name: Install plugin
         run: |
           cmake --install build_x64 --config RelWithDebInfo
           Get-ChildItem -Recurse "$env:PACKAGE_DIR" | Select-Object FullName
+
+      - name: Stage portable layout
+        run: |
+          # OBS 33 layout: <plugin>/<plugin>.dll beside <plugin>/data
+          $stage = "dist/frameflow"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "package/obs-plugins/64bit/frameflow.dll" "$stage/"
+          Copy-Item -Recurse "package/obs-plugins/frameflow" "$stage/data"
+          Copy-Item "LICENSE", "README.md" "$stage/"
+          Get-ChildItem -Recurse dist | Select-Object FullName
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v7
         with:
           name: frameflow-windows-x64
-          path: ${{ env.PACKAGE_DIR }}
+          path: dist/
           if-no-files-found: error
           retention-days: 14

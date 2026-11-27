@@ -25,7 +25,12 @@ cmake --build build_x64 --config RelWithDebInfo
 
 ## 安装到 OBS（开发用）
 
+OBS 33 起使用单层目录：`<plugin>.dll` 与 `data\` 并排。
+
 ```bat
-xcopy /E /I build_x64\RelWithDebInfo\frameflow.dll ^
-      "C:\ProgramData\obs-studio\plugins\frameflow\bin\64bit\"
+mkdir "C:\ProgramData\obs-studio\plugins\frameflow"
+copy build_x64\install\obs-plugins\64bit\frameflow.dll ^
+     "C:\ProgramData\obs-studio\plugins\frameflow\"
+xcopy /E /I build_x64\install\obs-plugins\frameflow ^
+      "C:\ProgramData\obs-studio\plugins\frameflow\data"
 ```
