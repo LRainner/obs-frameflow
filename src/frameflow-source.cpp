@@ -4,6 +4,7 @@
 #include <util/bmem.h>
 
 #include <charconv>
+#include <mutex>
 #include <string_view>
 #include <unordered_set>
 
@@ -49,6 +50,9 @@ struct FrameFlowSource {
 
 	// Whether the input is registered as an active child.
 	bool child_added = false;
+
+	// Guards input/child_added against the active-tree callback.
+	std::mutex input_mutex;
 };
 
 struct ContainsContext {
@@ -103,16 +107,24 @@ static bool contains_source(obs_source_t *haystack, obs_source_t *needle)
 
 static void release_input(FrameFlowSource *s)
 {
-	if (!s->input)
-		return;
+	obs_source_t *old = nullptr;
+	bool registered = false;
 
-	if (s->child_added) {
-		obs_source_remove_active_child(s->self, s->input);
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		old = s->input;
+		registered = s->child_added;
+		s->input = nullptr;
 		s->child_added = false;
 	}
 
-	obs_source_release(s->input);
-	s->input = nullptr;
+	if (!old)
+		return;
+
+	if (registered)
+		obs_source_remove_active_child(s->self, old);
+
+	obs_source_release(old);
 }
 
 static void set_input(FrameFlowSource *s, const char *name)
@@ -130,21 +142,33 @@ static void set_input(FrameFlowSource *s, const char *name)
 		}
 	}
 
-	if (next == s->input) {
+	bool same;
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		same = next == s->input;
+	}
+	if (same) {
 		obs_source_release(next);
 		return;
 	}
 
 	release_input(s);
-	s->input = next;
 
-	if (s->input) {
-		s->child_added = obs_source_add_active_child(s->self, s->input);
-		if (!s->child_added) {
-			blog(LOG_WARNING, "[frameflow] could not activate input");
-			obs_source_release(s->input);
-			s->input = nullptr;
-		}
+	if (!next)
+		return;
+
+	// add_active_child walks the candidate's tree to reject cycles; the
+	// candidate must not be reachable through us until that check passes.
+	if (!obs_source_add_active_child(s->self, next)) {
+		blog(LOG_WARNING, "[frameflow] could not activate input");
+		obs_source_release(next);
+		return;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		s->input = next;
+		s->child_added = true;
 	}
 }
 
@@ -414,8 +438,22 @@ void ff_enum_active_sources(void *data, obs_source_enum_proc_t callback,
 			    void *param)
 {
 	auto *s = static_cast<FrameFlowSource *>(data);
-	if (s && s->input)
-		callback(s->self, s->input, param);
+	if (!s)
+		return;
+
+	obs_source_t *input = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(s->input_mutex);
+		input = s->input;
+		if (input)
+			obs_source_get_ref(input);
+	}
+
+	if (!input)
+		return;
+
+	callback(s->self, input, param);
+	obs_source_release(input);
 }
 
 obs_source_info build_info()
