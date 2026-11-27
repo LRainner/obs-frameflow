@@ -75,3 +75,12 @@ jobs:
           $tag = "${{ needs.release-please.outputs.tag }}"
           $version = "${{ needs.release-please.outputs.version }}"
           gh release upload $tag "frameflow-$version-win64.zip" "SHA256SUMS.txt" --clobber
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Assets are attached; publishing also creates the tag.
+          gh release edit "${{ steps.release.outputs.tag }}" --draft=false
