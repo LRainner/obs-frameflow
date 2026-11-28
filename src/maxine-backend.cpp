@@ -52,6 +52,7 @@ enum Entries {
 	NVCV_RGBA = 6,
 	NVCV_U8 = 1,
 	NVCV_CHUNKY = 0,
+	NVCV_CPU = 0,
 	NVCV_GPU = 1,
 };
 
