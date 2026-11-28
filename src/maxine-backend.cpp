@@ -1,5 +1,6 @@
 #include "maxine-backend.hpp"
 
+#include <obs-module.h>
 #include <graphics/graphics.h>
 #include <util/bmem.h>
 #include <util/platform.h>
