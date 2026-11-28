@@ -65,6 +65,7 @@ struct State {
 	NvImage *gpu_in = nullptr;
 	NvImage *gpu_out = nullptr;
 
+	struct gs_texture *in_texture = nullptr;
 	struct gs_texture *out_texture = nullptr;
 	ID3D11Texture2D *in_d3d = nullptr;
 	ID3D11Texture2D *out_d3d = nullptr;
@@ -229,6 +230,10 @@ void release_pipeline()
 		api.img_destroy(g_state.gpu_out);
 		g_state.gpu_out = nullptr;
 	}
+	if (g_state.in_texture) {
+		gs_texture_destroy(g_state.in_texture);
+		g_state.in_texture = nullptr;
+	}
 	if (g_state.out_texture) {
 		gs_texture_destroy(g_state.out_texture);
 		g_state.out_texture = nullptr;
@@ -247,10 +252,10 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 {
 	Api &api = g_state.api;
 
-	ID3D11Texture2D *src_d3d =
-		static_cast<ID3D11Texture2D *>(gs_texture_get_obj(src));
+	ID3D11Texture2D *src_d3d = static_cast<ID3D11Texture2D *>(
+		gs_texture_get_obj(g_state.in_texture));
 	if (!src_d3d) {
-		blog(LOG_WARNING, "[frameflow] maxine: source texture unavailable");
+		blog(LOG_WARNING, "[frameflow] maxine: input texture unavailable");
 		return false;
 	}
 
@@ -261,8 +266,17 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 
 	release_pipeline();
 
-	g_state.out_texture = gs_texture_create(out_width, out_height, GS_RGBA,
-						1, nullptr, GS_RENDER_TARGET);
+	// OBS textures are typeless; the SDK needs a typed format.
+	g_state.in_texture = gs_texture_create(in_width, in_height,
+					       GS_RGBA_UNORM, 1, nullptr, 0);
+	if (!g_state.in_texture) {
+		blog(LOG_WARNING, "[frameflow] maxine: input texture create failed");
+		return false;
+	}
+
+	g_state.out_texture = gs_texture_create(out_width, out_height,
+						GS_RGBA_UNORM, 1, nullptr,
+						GS_RENDER_TARGET);
 	if (!g_state.out_texture) {
 		blog(LOG_WARNING, "[frameflow] maxine: output texture create failed");
 		return false;
@@ -292,9 +306,7 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 
 	st = api.img_from_d3d11(&g_state.wrap_in, src_d3d);
 	if (st != 0) {
-		blog(LOG_WARNING,
-		     "[frameflow] maxine: source wrap failed %d (format %d)",
-		     st, (int)gs_texture_get_color_format(src));
+		blog(LOG_WARNING, "[frameflow] maxine: input wrap failed %d", st);
 		return false;
 	}
 	g_state.wrap_in_valid = true;
@@ -373,6 +385,9 @@ struct gs_texture *upscale(struct gs_texture *src, uint32_t in_width,
 		release_pipeline();
 		return nullptr;
 	}
+
+	gs_copy_texture_region(g_state.in_texture, 0, 0, src, 0, 0, in_width,
+			       in_height);
 
 	if (api.img_map(&g_state.wrap_in, g_state.stream) != 0)
 		return nullptr;
