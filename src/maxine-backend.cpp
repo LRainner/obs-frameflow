@@ -52,7 +52,6 @@ enum Entries {
 	NVCV_RGBA = 6,
 	NVCV_U8 = 1,
 	NVCV_CHUNKY = 0,
-	NVCV_CPU = 0,
 	NVCV_GPU = 1,
 };
 
@@ -68,13 +67,11 @@ struct State {
 
 	struct gs_texture *in_texture = nullptr;
 	struct gs_texture *out_texture = nullptr;
+	struct gs_texture *draw_texture = nullptr;
 	ID3D11Texture2D *in_d3d = nullptr;
 	ID3D11Texture2D *out_d3d = nullptr;
 
 	NvImage wrap_in = {};
-	NvImage *dbg_in = nullptr;
-	NvImage *dbg_out = nullptr;
-	uint64_t frames = 0;
 	NvImage wrap_out = {};
 	bool wrap_in_valid = false;
 	bool wrap_out_valid = false;
@@ -226,14 +223,6 @@ void release_pipeline()
 		api.stream_destroy(g_state.stream);
 	}
 	g_state.stream = nullptr;
-	if (g_state.dbg_in) {
-		api.img_destroy(g_state.dbg_in);
-		g_state.dbg_in = nullptr;
-	}
-	if (g_state.dbg_out) {
-		api.img_destroy(g_state.dbg_out);
-		g_state.dbg_out = nullptr;
-	}
 	if (g_state.gpu_in) {
 		api.img_destroy(g_state.gpu_in);
 		g_state.gpu_in = nullptr;
@@ -249,6 +238,10 @@ void release_pipeline()
 	if (g_state.out_texture) {
 		gs_texture_destroy(g_state.out_texture);
 		g_state.out_texture = nullptr;
+	}
+	if (g_state.draw_texture) {
+		gs_texture_destroy(g_state.draw_texture);
+		g_state.draw_texture = nullptr;
 	}
 	g_state.in_d3d = nullptr;
 	g_state.out_d3d = nullptr;
@@ -287,6 +280,15 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 	if (!g_state.out_texture) {
 		blog(LOG_WARNING,
 		     "[frameflow] maxine: output texture create failed");
+		return false;
+	}
+
+	g_state.draw_texture = gs_texture_create(out_width, out_height,
+						 GS_RGBA, 1, nullptr,
+						 GS_RENDER_TARGET);
+	if (!g_state.draw_texture) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: draw texture create failed");
 		return false;
 	}
 
@@ -334,19 +336,6 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 		return false;
 	}
 	g_state.wrap_out_valid = true;
-
-	st = api.img_create(in_width, in_height, NVCV_RGBA, NVCV_U8, NVCV_CHUNKY,
-			    NVCV_CPU, 1, &g_state.dbg_in);
-	if (st != 0) {
-		blog(LOG_WARNING, "[frameflow] maxine: debug input failed %d", st);
-		return false;
-	}
-	st = api.img_create(out_width, out_height, NVCV_RGBA, NVCV_U8,
-			    NVCV_CHUNKY, NVCV_CPU, 1, &g_state.dbg_out);
-	if (st != 0) {
-		blog(LOG_WARNING, "[frameflow] maxine: debug output failed %d", st);
-		return false;
-	}
 
 	st = api.create_effect("VideoSuperRes", &g_state.effect);
 	if (st != 0) {
@@ -452,35 +441,12 @@ struct gs_texture *upscale(struct gs_texture *src, uint32_t in_width,
 		return nullptr;
 	}
 
-	++g_state.frames;
-	if (g_state.dbg_in && g_state.dbg_out &&
-	    (g_state.frames % 120) == 0) {
-		api.img_transfer(g_state.gpu_in, g_state.dbg_in, 1.f,
-				 g_state.stream, nullptr);
-		api.img_transfer(g_state.gpu_out, g_state.dbg_out, 1.f,
-				 g_state.stream, nullptr);
-		api.stream_sync(g_state.stream);
+	// OBS samples typeless textures with an sRGB view; copy the result
+	// into one so the colour conversion matches the Lanczos path.
+	gs_copy_texture_region(g_state.draw_texture, 0, 0, g_state.out_texture,
+			       0, 0, out_width, out_height);
 
-		const unsigned char *in =
-			(const unsigned char *)g_state.dbg_in;
-		const unsigned char *out =
-			(const unsigned char *)g_state.dbg_out;
-		const size_t in_mid =
-			((size_t)(g_state.in_height / 2) * g_state.in_width +
-			 g_state.in_width / 2) *
-			4;
-		const size_t out_mid =
-			((size_t)(g_state.out_height / 2) * g_state.out_width +
-			 g_state.out_width / 2) *
-			4;
-		blog(LOG_INFO,
-		     "[frameflow] vsr sample in=%u,%u,%u out=%u,%u,%u frame=%llu",
-		     in[in_mid], in[in_mid + 1], in[in_mid + 2], out[out_mid],
-		     out[out_mid + 1], out[out_mid + 2],
-		     (unsigned long long)g_state.frames);
-	}
-
-	return g_state.out_texture;
+	return g_state.draw_texture;
 }
 
 void shutdown()
