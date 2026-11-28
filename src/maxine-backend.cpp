@@ -92,9 +92,14 @@ wchar_t *utf8_to_wide(const char *text)
 	return wide;
 }
 
-HMODULE load_module(const wchar_t *path)
+HMODULE load_module(const wchar_t *path, const char *label)
 {
-	return LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	HMODULE module =
+		LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	if (!module)
+		blog(LOG_WARNING, "[frameflow] load %s failed (%lu): %ls", label,
+		     GetLastError(), path);
+	return module;
 }
 
 bool load_api()
@@ -112,7 +117,7 @@ bool load_api()
 		return false;
 	}
 
-	wchar_t *vfx_path = utf8_to_wide(hint);
+	blog(LOG_INFO, "[frameflow] maxine path: %s", hint);`n	wchar_t *vfx_path = utf8_to_wide(hint);
 	bfree(hint);
 	if (!vfx_path) {
 		g_state.failed = true;
@@ -134,9 +139,9 @@ bool load_api()
 			 L"nvngxruntime.dll");
 
 	Api &api = g_state.api;
-	api.ngx = load_module(ngx_path);
-	api.img = load_module(img_path);
-	api.vfx = load_module(vfx_path);
+	api.ngx = load_module(ngx_path, "nvngxruntime");
+	api.img = load_module(img_path, "NVCVImage");
+	api.vfx = load_module(vfx_path, "NVVideoEffects");
 	bfree(vfx_path);
 
 	auto resolve = [](HMODULE mod, const char *name) -> FARPROC {
