@@ -125,6 +125,12 @@ bool load_api()
 		return false;
 	}
 
+	// obs_module_file() uses forward slashes on Windows.
+	for (wchar_t *c = vfx_path; *c; ++c) {
+		if (*c == L'/')
+			*c = L'\\';
+	}
+
 	wchar_t img_path[MAX_PATH];
 	wcscpy_s(img_path, vfx_path);
 	wchar_t *slash = wcsrchr(img_path, L'\\');
