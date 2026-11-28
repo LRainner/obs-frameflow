@@ -1,9 +1,11 @@
 #include "frameflow-source.hpp"
+#include "maxine-backend.hpp"
 
 #include <graphics/graphics.h>
 #include <util/bmem.h>
 
 #include <charconv>
+#include <cstring>
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
@@ -44,6 +46,9 @@ struct FrameFlowSource {
 	gs_eparam_t *scale_size = nullptr;
 
 	bool show_original = false;
+
+	// 0 = auto, 1 = Lanczos, 2 = Maxine VSR.
+	int upscale_mode = 0;
 
 	// Recursive render guard.
 	bool rendering = false;
@@ -218,6 +223,11 @@ static void apply_settings(FrameFlowSource *s, obs_data_t *settings)
 	parse_resolution(obs_data_get_string(settings, "resolution"),
 			 &s->out_width, &s->out_height);
 	s->show_original = obs_data_get_bool(settings, "show_original");
+
+	const char *upscale = obs_data_get_string(settings, "upscale");
+	s->upscale_mode = strcmp(upscale, "maxine") == 0 ? 2
+			  : strcmp(upscale, "lanczos") == 0 ? 1
+							      : 0;
 }
 
 const char *ff_get_name(void *)
@@ -258,6 +268,7 @@ void ff_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "input", "");
 	obs_data_set_default_string(settings, "resolution", "2560x1440");
 	obs_data_set_default_bool(settings, "show_original", false);
+	obs_data_set_default_string(settings, "upscale", "auto");
 }
 
 void ff_update(void *data, obs_data_t *settings)
@@ -323,6 +334,18 @@ obs_properties_t *ff_get_properties(void *data)
 	obs_property_set_long_description(
 		resolution, obs_module_text("OutputResolution.Description"));
 
+	obs_property_t *upscale = obs_properties_add_list(
+		props, "upscale", obs_module_text("UpscaleMode"),
+		OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(upscale, obs_module_text("UpscaleAuto"),
+				     "auto");
+	obs_property_list_add_string(upscale,
+				     obs_module_text("UpscaleLanczos"),
+				     "lanczos");
+	obs_property_list_add_string(upscale, obs_module_text("UpscaleMaxine"),
+				     "maxine");
+	obs_property_set_long_description(
+		upscale, obs_module_text("UpscaleMode.Description"));
 	obs_property_t *original = obs_properties_add_bool(
 		props, "show_original", obs_module_text("ShowOriginal"));
 	obs_property_set_long_description(
@@ -491,9 +514,23 @@ void ff_render(void *data, gs_effect_t *)
 	if (!texture)
 		return;
 
+	bool used_upscale = false;
+
+	// Maxine VSR only accepts 8-bit SDR input.
+	if (!s->show_original && s->upscale_mode != 1 &&
+	    source_space == GS_CS_SRGB && format == GS_RGBA) {
+		gs_texture_t *vsr = maxine::upscale(texture, width, height,
+						    s->out_width,
+						    s->out_height);
+		if (vsr) {
+			texture = vsr;
+			used_upscale = true;
+		}
+	}
+
 	// Lanczos pass into the output resolution. The final draw below still
 	// goes through the color-space conversion table.
-	if (s->scale && s->upscaled) {
+	if (!used_upscale && !s->show_original && s->scale && s->upscaled) {
 		gs_texrender_reset(s->upscaled);
 		if (gs_texrender_begin_with_color_space(s->upscaled,
 							s->out_width,
@@ -518,8 +555,10 @@ void ff_render(void *data, gs_effect_t *)
 
 			gs_texture_t *scaled =
 				gs_texrender_get_texture(s->upscaled);
-			if (scaled)
+			if (scaled) {
 				texture = scaled;
+				used_upscale = true;
+			}
 		} else {
 			gs_texrender_reset(s->upscaled);
 		}

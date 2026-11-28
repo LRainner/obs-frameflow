@@ -32,6 +32,7 @@ configure_file(
 add_library(frameflow MODULE
   src/plugin-main.cpp
   src/frameflow-source.cpp
+  src/maxine-backend.cpp
 )
 
 target_include_directories(frameflow PRIVATE

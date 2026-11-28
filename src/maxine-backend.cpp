@@ -1,0 +1,497 @@
+#include "maxine-backend.hpp"
+
+#include <obs-module.h>
+#include <graphics/graphics.h>
+#include <util/bmem.h>
+#include <util/platform.h>
+
+#include <windows.h>
+#include <d3d11.h>
+
+#include <cstring>
+#include <cwchar>
+
+namespace {
+
+// NvCVImage is 64 bytes in the SDK; we never touch its fields, so the
+// runtime API works against this opaque buffer.
+struct alignas(8) NvImage {
+	unsigned char bytes[64];
+};
+
+using Status = int;
+
+struct Api {
+	HMODULE vfx = nullptr;
+	HMODULE img = nullptr;
+	HMODULE ngx = nullptr;
+
+	Status(__cdecl *create_effect)(const char *, void **) = nullptr;
+	Status(__cdecl *set_image)(void *, const char *, void *) = nullptr;
+	Status(__cdecl *set_u32)(void *, const char *, unsigned) = nullptr;
+	Status(__cdecl *set_stream)(void *, const char *, void *) = nullptr;
+	Status(__cdecl *load)(void *) = nullptr;
+	Status(__cdecl *run)(void *, int) = nullptr;
+	Status(__cdecl *destroy_effect)(void *) = nullptr;
+	Status(__cdecl *stream_create)(void **) = nullptr;
+	Status(__cdecl *stream_sync)(void *) = nullptr;
+	Status(__cdecl *stream_destroy)(void *) = nullptr;
+
+	Status(__cdecl *img_create)(unsigned, unsigned, int, int, unsigned,
+				    unsigned, unsigned, NvImage **) = nullptr;
+	Status(__cdecl *img_transfer)(const NvImage *, NvImage *, float,
+				      void *, NvImage *) = nullptr;
+	Status(__cdecl *img_from_d3d11)(NvImage *, ID3D11Texture2D *) = nullptr;
+	Status(__cdecl *img_map)(NvImage *, void *) = nullptr;
+	Status(__cdecl *img_unmap)(NvImage *, void *) = nullptr;
+	void(__cdecl *img_dealloc)(NvImage *) = nullptr;
+	void(__cdecl *img_destroy)(NvImage *) = nullptr;
+};
+
+enum Entries {
+	NVCV_RGBA = 6,
+	NVCV_U8 = 1,
+	NVCV_CHUNKY = 0,
+	NVCV_GPU = 1,
+};
+
+struct State {
+	bool loaded = false;
+	bool failed = false;
+	int retry_wait = 0;
+	Api api;
+
+	void *effect = nullptr;
+	void *stream = nullptr;
+	NvImage *gpu_in = nullptr;
+	NvImage *gpu_out = nullptr;
+
+	struct gs_texture *in_texture = nullptr;
+	struct gs_texture *out_texture = nullptr;
+	struct gs_texture *draw_texture = nullptr;
+	ID3D11Texture2D *in_d3d = nullptr;
+	ID3D11Texture2D *out_d3d = nullptr;
+
+	NvImage wrap_in = {};
+	NvImage wrap_out = {};
+	bool wrap_in_valid = false;
+	bool wrap_out_valid = false;
+
+	uint32_t in_width = 0;
+	uint32_t in_height = 0;
+	uint32_t out_width = 0;
+	uint32_t out_height = 0;
+};
+
+State g_state;
+
+wchar_t *utf8_to_wide(const char *text)
+{
+	size_t len = strlen(text) + 1;
+	auto *wide = static_cast<wchar_t *>(bmalloc(sizeof(wchar_t) * len));
+	if (!wide)
+		return nullptr;
+	MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, (int)len);
+	return wide;
+}
+
+void release_modules()
+{
+	if (g_state.api.vfx) {
+		FreeLibrary(g_state.api.vfx);
+		g_state.api.vfx = nullptr;
+	}
+	if (g_state.api.img) {
+		FreeLibrary(g_state.api.img);
+		g_state.api.img = nullptr;
+	}
+	if (g_state.api.ngx) {
+		FreeLibrary(g_state.api.ngx);
+		g_state.api.ngx = nullptr;
+	}
+}
+
+HMODULE load_module(const wchar_t *path, const char *label)
+{
+	HMODULE module =
+		LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+	if (!module)
+		blog(LOG_WARNING, "[frameflow] load %s failed (%lu): %ls", label,
+		     GetLastError(), path);
+	return module;
+}
+
+bool load_api()
+{
+	if (g_state.loaded)
+		return true;
+	if (g_state.failed)
+		return false;
+
+	char *hint = obs_module_file("maxine/bin/NVVideoEffects.dll");
+	if (!hint) {
+		blog(LOG_INFO,
+		     "[frameflow] maxine runtime not found, using Lanczos");
+		g_state.failed = true;
+		return false;
+	}
+
+	blog(LOG_INFO, "[frameflow] maxine path: %s", hint);
+	wchar_t *vfx_path = utf8_to_wide(hint);
+	bfree(hint);
+	if (!vfx_path) {
+		g_state.failed = true;
+		return false;
+	}
+
+	// obs_module_file() uses forward slashes on Windows.
+	for (wchar_t *c = vfx_path; *c; ++c) {
+		if (*c == L'/')
+			*c = L'\\';
+	}
+
+	wchar_t img_path[MAX_PATH];
+	wcscpy_s(img_path, vfx_path);
+	wchar_t *slash = wcsrchr(img_path, L'\\');
+	if (slash)
+		wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - img_path),
+			 L"NVCVImage.dll");
+
+	wchar_t ngx_path[MAX_PATH];
+	wcscpy_s(ngx_path, vfx_path);
+	slash = wcsrchr(ngx_path, L'\\');
+	if (slash)
+		wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - ngx_path),
+			 L"nvngxruntime.dll");
+
+	Api &api = g_state.api;
+	api.ngx = load_module(ngx_path, "nvngxruntime");
+	api.img = load_module(img_path, "NVCVImage");
+	api.vfx = load_module(vfx_path, "NVVideoEffects");
+	bfree(vfx_path);
+
+	auto resolve = [](HMODULE mod, const char *name) -> FARPROC {
+		return mod ? GetProcAddress(mod, name) : nullptr;
+	};
+
+	if (!api.vfx || !api.img) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine runtime could not be loaded (%lu)",
+		     GetLastError());
+		g_state.failed = true;
+		release_modules();
+		return false;
+	}
+
+#define RESOLVE(field, module, symbol)                                         \
+	api.field = reinterpret_cast<decltype(api.field)>(                      \
+		resolve(module, symbol));                                       \
+	if (!api.field) {                                                      \
+		blog(LOG_WARNING, "[frameflow] missing %s", symbol);           \
+		g_state.failed = true;                                         \
+		release_modules();                                             \
+		return false;                                                  \
+	}
+
+	RESOLVE(create_effect, api.vfx, "NvVFX_CreateEffect");
+	RESOLVE(set_image, api.vfx, "NvVFX_SetImage");
+	RESOLVE(set_u32, api.vfx, "NvVFX_SetU32");
+	RESOLVE(set_stream, api.vfx, "NvVFX_SetCudaStream");
+	RESOLVE(load, api.vfx, "NvVFX_Load");
+	RESOLVE(run, api.vfx, "NvVFX_Run");
+	RESOLVE(destroy_effect, api.vfx, "NvVFX_DestroyEffect");
+	RESOLVE(stream_create, api.vfx, "NvVFX_CudaStreamCreate");
+	RESOLVE(stream_sync, api.vfx, "NvVFX_CudaStreamSynchronize");
+	RESOLVE(stream_destroy, api.vfx, "NvVFX_CudaStreamDestroy");
+	RESOLVE(img_create, api.img, "NvCVImage_Create");
+	RESOLVE(img_transfer, api.img, "NvCVImage_Transfer");
+	RESOLVE(img_from_d3d11, api.img, "NvCVImage_InitFromD3D11Texture");
+	RESOLVE(img_map, api.img, "NvCVImage_MapResource");
+	RESOLVE(img_unmap, api.img, "NvCVImage_UnmapResource");
+	RESOLVE(img_dealloc, api.img, "NvCVImage_Dealloc");
+	RESOLVE(img_destroy, api.img, "NvCVImage_Destroy");
+#undef RESOLVE
+
+	g_state.loaded = true;
+	blog(LOG_INFO, "[frameflow] maxine runtime loaded");
+	return true;
+}
+
+void release_texture_wraps()
+{
+	Api &api = g_state.api;
+	if (g_state.wrap_in_valid) {
+		api.img_dealloc(&g_state.wrap_in);
+		g_state.wrap_in_valid = false;
+	}
+	if (g_state.wrap_out_valid) {
+		api.img_dealloc(&g_state.wrap_out);
+		g_state.wrap_out_valid = false;
+	}
+}
+
+void release_pipeline()
+{
+	Api &api = g_state.api;
+	release_texture_wraps();
+	if (g_state.effect) {
+		api.destroy_effect(g_state.effect);
+		g_state.effect = nullptr;
+	}
+	if (g_state.stream && api.stream_destroy) {
+		api.stream_destroy(g_state.stream);
+	}
+	g_state.stream = nullptr;
+	if (g_state.gpu_in) {
+		api.img_destroy(g_state.gpu_in);
+		g_state.gpu_in = nullptr;
+	}
+	if (g_state.gpu_out) {
+		api.img_destroy(g_state.gpu_out);
+		g_state.gpu_out = nullptr;
+	}
+	if (g_state.in_texture) {
+		gs_texture_destroy(g_state.in_texture);
+		g_state.in_texture = nullptr;
+	}
+	if (g_state.out_texture) {
+		gs_texture_destroy(g_state.out_texture);
+		g_state.out_texture = nullptr;
+	}
+	if (g_state.draw_texture) {
+		gs_texture_destroy(g_state.draw_texture);
+		g_state.draw_texture = nullptr;
+	}
+	g_state.in_d3d = nullptr;
+	g_state.out_d3d = nullptr;
+	g_state.in_width = 0;
+	g_state.in_height = 0;
+	g_state.out_width = 0;
+	g_state.out_height = 0;
+}
+
+bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
+		     uint32_t in_height, uint32_t out_width,
+		     uint32_t out_height)
+{
+	(void)src;
+	Api &api = g_state.api;
+
+	if (g_state.effect && g_state.in_width == in_width &&
+	    g_state.in_height == in_height && g_state.out_width == out_width &&
+	    g_state.out_height == out_height)
+		return true;
+
+	release_pipeline();
+
+	// OBS textures are typeless; the SDK needs typed formats.
+	g_state.in_texture = gs_texture_create(in_width, in_height,
+					       GS_RGBA_UNORM, 1, nullptr, 0);
+	if (!g_state.in_texture) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: input texture create failed");
+		return false;
+	}
+
+	g_state.out_texture = gs_texture_create(out_width, out_height,
+						GS_RGBA_UNORM, 1, nullptr,
+						GS_RENDER_TARGET);
+	if (!g_state.out_texture) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: output texture create failed");
+		return false;
+	}
+
+	g_state.draw_texture = gs_texture_create(out_width, out_height,
+						 GS_RGBA, 1, nullptr,
+						 GS_RENDER_TARGET);
+	if (!g_state.draw_texture) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: draw texture create failed");
+		return false;
+	}
+
+	ID3D11Texture2D *src_d3d = static_cast<ID3D11Texture2D *>(
+		gs_texture_get_obj(g_state.in_texture));
+	if (!src_d3d) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: input texture unavailable");
+		return false;
+	}
+
+	ID3D11Texture2D *out_d3d = static_cast<ID3D11Texture2D *>(
+		gs_texture_get_obj(g_state.out_texture));
+	if (!out_d3d) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: output texture unavailable");
+		return false;
+	}
+
+	Status st = api.img_create(in_width, in_height, NVCV_RGBA, NVCV_U8,
+				   NVCV_CHUNKY, NVCV_GPU, 1,
+				   &g_state.gpu_in);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: input image failed %d", st);
+		return false;
+	}
+	st = api.img_create(out_width, out_height, NVCV_RGBA, NVCV_U8,
+			    NVCV_CHUNKY, NVCV_GPU, 1, &g_state.gpu_out);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: output image failed %d",
+		     st);
+		return false;
+	}
+
+	st = api.img_from_d3d11(&g_state.wrap_in, src_d3d);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: input wrap failed %d", st);
+		return false;
+	}
+	g_state.wrap_in_valid = true;
+
+	st = api.img_from_d3d11(&g_state.wrap_out, out_d3d);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: output wrap failed %d", st);
+		return false;
+	}
+	g_state.wrap_out_valid = true;
+
+	st = api.create_effect("VideoSuperRes", &g_state.effect);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: create effect failed %d",
+		     st);
+		return false;
+	}
+	st = api.stream_create(&g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: stream failed %d", st);
+		return false;
+	}
+	st = api.set_stream(g_state.effect, "CudaStream", g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set stream failed %d", st);
+		return false;
+	}
+	st = api.set_u32(g_state.effect, "QualityLevel", 1);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set quality failed %d", st);
+		return false;
+	}
+	st = api.set_image(g_state.effect, "SrcImage0", g_state.gpu_in);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set input failed %d", st);
+		return false;
+	}
+	st = api.set_image(g_state.effect, "DstImage0", g_state.gpu_out);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set output failed %d", st);
+		return false;
+	}
+	st = api.load(g_state.effect);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: load failed %d", st);
+		return false;
+	}
+
+	g_state.in_d3d = src_d3d;
+	g_state.out_d3d = out_d3d;
+	g_state.in_width = in_width;
+	g_state.in_height = in_height;
+	g_state.out_width = out_width;
+	g_state.out_height = out_height;
+	return true;
+}
+} // namespace
+
+namespace maxine {
+
+bool available()
+{
+	return load_api();
+}
+
+struct gs_texture *upscale(struct gs_texture *src, uint32_t in_width,
+			   uint32_t in_height, uint32_t out_width,
+			   uint32_t out_height)
+{
+	if (!load_api())
+		return nullptr;
+
+	if (g_state.retry_wait > 0) {
+		--g_state.retry_wait;
+		return nullptr;
+	}
+
+	Api &api = g_state.api;
+	if (!ensure_pipeline(src, in_width, in_height, out_width, out_height)) {
+		blog(LOG_WARNING, "[frameflow] maxine pipeline init failed");
+		release_pipeline();
+		g_state.retry_wait = 600;
+		return nullptr;
+	}
+
+	gs_copy_texture_region(g_state.in_texture, 0, 0, src, 0, 0, in_width,
+			       in_height);
+
+	Status st = api.img_map(&g_state.wrap_in, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine input map failed: %d", st);
+		return nullptr;
+	}
+
+	st = api.img_transfer(&g_state.wrap_in, g_state.gpu_in, 1.f,
+			      g_state.stream, nullptr);
+	if (st == 0)
+		st = api.img_unmap(&g_state.wrap_in, g_state.stream);
+	else
+		api.img_unmap(&g_state.wrap_in, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine input transfer failed: %d",
+		     st);
+		return nullptr;
+	}
+
+	st = api.run(g_state.effect, 0);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine run failed: %d", st);
+		return nullptr;
+	}
+
+	st = api.img_map(&g_state.wrap_out, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine output map failed: %d", st);
+		return nullptr;
+	}
+
+	st = api.img_transfer(g_state.gpu_out, &g_state.wrap_out, 1.f,
+			      g_state.stream, nullptr);
+	if (st == 0)
+		st = api.stream_sync(g_state.stream);
+	if (st == 0)
+		st = api.img_unmap(&g_state.wrap_out, g_state.stream);
+	else
+		api.img_unmap(&g_state.wrap_out, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine output transfer failed: %d",
+		     st);
+		return nullptr;
+	}
+
+	// OBS samples typeless textures with an sRGB view; copy the result
+	// into one so the colour conversion matches the Lanczos path.
+	gs_copy_texture_region(g_state.draw_texture, 0, 0, g_state.out_texture,
+			       0, 0, out_width, out_height);
+
+	return g_state.draw_texture;
+}
+
+void shutdown()
+{
+	if (!g_state.loaded)
+		return;
+	release_pipeline();
+	release_modules();
+	g_state = State{};
+}
+
+} // namespace maxine

@@ -1,4 +1,5 @@
 #include "frameflow-source.hpp"
+#include "maxine-backend.hpp"
 #include "frameflow-version.hpp"
 
 #include <obs-module.h>
@@ -14,6 +15,13 @@ MODULE_EXPORT const char *obs_module_name(void)
 MODULE_EXPORT const char *obs_module_description(void)
 {
 	return "Real-time upscaling, denoise and frame generation for any OBS source.";
+}
+
+void obs_module_unload(void)
+{
+	obs_enter_graphics();
+	maxine::shutdown();
+	obs_leave_graphics();
 }
 
 bool obs_module_load(void)
