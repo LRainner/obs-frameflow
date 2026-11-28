@@ -117,7 +117,8 @@ bool load_api()
 		return false;
 	}
 
-	blog(LOG_INFO, "[frameflow] maxine path: %s", hint);`n	wchar_t *vfx_path = utf8_to_wide(hint);
+	blog(LOG_INFO, "[frameflow] maxine path: %s", hint);
+	wchar_t *vfx_path = utf8_to_wide(hint);
 	bfree(hint);
 	if (!vfx_path) {
 		g_state.failed = true;
