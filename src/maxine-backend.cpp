@@ -249,8 +249,10 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 
 	ID3D11Texture2D *src_d3d =
 		static_cast<ID3D11Texture2D *>(gs_texture_get_obj(src));
-	if (!src_d3d)
+	if (!src_d3d) {
+		blog(LOG_WARNING, "[frameflow] maxine: source texture unavailable");
 		return false;
+	}
 
 	if (g_state.effect && g_state.in_d3d == src_d3d &&
 	    g_state.in_width == in_width && g_state.in_height == in_height &&
@@ -261,42 +263,84 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 
 	g_state.out_texture = gs_texture_create(out_width, out_height, GS_RGBA,
 						1, nullptr, GS_RENDER_TARGET);
-	if (!g_state.out_texture)
+	if (!g_state.out_texture) {
+		blog(LOG_WARNING, "[frameflow] maxine: output texture create failed");
 		return false;
+	}
 
 	ID3D11Texture2D *out_d3d = static_cast<ID3D11Texture2D *>(
 		gs_texture_get_obj(g_state.out_texture));
-	if (!out_d3d)
+	if (!out_d3d) {
+		blog(LOG_WARNING, "[frameflow] maxine: output texture unavailable");
 		return false;
+	}
 
-	if (api.img_create(in_width, in_height, NVCV_RGBA, NVCV_U8,
-			   NVCV_CHUNKY, NVCV_GPU, 1, &g_state.gpu_in) != 0)
+	Status st = api.img_create(in_width, in_height, NVCV_RGBA, NVCV_U8,
+				   NVCV_CHUNKY, NVCV_GPU, 1,
+				   &g_state.gpu_in);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: input image failed %d", st);
 		return false;
-	if (api.img_create(out_width, out_height, NVCV_RGBA, NVCV_U8,
-			   NVCV_CHUNKY, NVCV_GPU, 1, &g_state.gpu_out) != 0)
+	}
+	st = api.img_create(out_width, out_height, NVCV_RGBA, NVCV_U8,
+			    NVCV_CHUNKY, NVCV_GPU, 1, &g_state.gpu_out);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: output image failed %d",
+		     st);
 		return false;
+	}
 
-	if (api.img_from_d3d11(&g_state.wrap_in, src_d3d) != 0)
+	st = api.img_from_d3d11(&g_state.wrap_in, src_d3d);
+	if (st != 0) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: source wrap failed %d (format %d)",
+		     st, (int)gs_texture_get_color_format(src));
 		return false;
+	}
 	g_state.wrap_in_valid = true;
-	if (api.img_from_d3d11(&g_state.wrap_out, out_d3d) != 0)
+	st = api.img_from_d3d11(&g_state.wrap_out, out_d3d);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: output wrap failed %d", st);
 		return false;
+	}
 	g_state.wrap_out_valid = true;
 
-	if (api.create_effect("VideoSuperRes", &g_state.effect) != 0)
+	st = api.create_effect("VideoSuperRes", &g_state.effect);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: create effect failed %d",
+		     st);
 		return false;
-	if (api.stream_create(&g_state.stream) != 0)
+	}
+	st = api.stream_create(&g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: stream failed %d", st);
 		return false;
-	if (api.set_stream(g_state.effect, "CudaStream", g_state.stream) != 0)
+	}
+	st = api.set_stream(g_state.effect, "CudaStream", g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set stream failed %d", st);
 		return false;
-	if (api.set_u32(g_state.effect, "QualityLevel", 1) != 0)
+	}
+	st = api.set_u32(g_state.effect, "QualityLevel", 1);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set quality failed %d", st);
 		return false;
-	if (api.set_image(g_state.effect, "SrcImage0", g_state.gpu_in) != 0)
+	}
+	st = api.set_image(g_state.effect, "SrcImage0", g_state.gpu_in);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set input failed %d", st);
 		return false;
-	if (api.set_image(g_state.effect, "DstImage0", g_state.gpu_out) != 0)
+	}
+	st = api.set_image(g_state.effect, "DstImage0", g_state.gpu_out);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: set output failed %d", st);
 		return false;
-	if (api.load(g_state.effect) != 0)
+	}
+	st = api.load(g_state.effect);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine: load failed %d", st);
 		return false;
+	}
 
 	g_state.in_d3d = src_d3d;
 	g_state.out_d3d = out_d3d;
