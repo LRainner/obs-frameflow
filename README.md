@@ -52,7 +52,8 @@
 
 1. 下载 `frameflow-maxine-*.zip` 组件包
 2. 解压到 `C:\ProgramData\obs-studio\plugins\frameflow\data\maxine\`
-3. 属性里把「缩放方式」设为 `自动` 或 `Maxine VSR`
+3. **重启 OBS**（运行库只在首次使用时探测，重启前不会重新查找）
+4. 属性里把「缩放方式」设为 `自动` 或 `Maxine VSR`
 
 组件包缺失时自动使用内置 Lanczos，不影响使用。
 

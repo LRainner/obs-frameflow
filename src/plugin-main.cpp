@@ -19,7 +19,9 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 void obs_module_unload(void)
 {
+	obs_enter_graphics();
 	maxine::shutdown();
+	obs_leave_graphics();
 }
 
 bool obs_module_load(void)

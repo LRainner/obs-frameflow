@@ -58,6 +58,7 @@ enum Entries {
 struct State {
 	bool loaded = false;
 	bool failed = false;
+	int retry_wait = 0;
 	Api api;
 
 	void *effect = nullptr;
@@ -92,6 +93,22 @@ wchar_t *utf8_to_wide(const char *text)
 		return nullptr;
 	MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, (int)len);
 	return wide;
+}
+
+void release_modules()
+{
+	if (g_state.api.vfx) {
+		FreeLibrary(g_state.api.vfx);
+		g_state.api.vfx = nullptr;
+	}
+	if (g_state.api.img) {
+		FreeLibrary(g_state.api.img);
+		g_state.api.img = nullptr;
+	}
+	if (g_state.api.ngx) {
+		FreeLibrary(g_state.api.ngx);
+		g_state.api.ngx = nullptr;
+	}
 }
 
 HMODULE load_module(const wchar_t *path, const char *label)
@@ -162,6 +179,7 @@ bool load_api()
 		     "[frameflow] maxine runtime could not be loaded (%lu)",
 		     GetLastError());
 		g_state.failed = true;
+		release_modules();
 		return false;
 	}
 
@@ -171,6 +189,7 @@ bool load_api()
 	if (!api.field) {                                                      \
 		blog(LOG_WARNING, "[frameflow] missing %s", symbol);           \
 		g_state.failed = true;                                         \
+		release_modules();                                             \
 		return false;                                                  \
 	}
 
@@ -398,23 +417,34 @@ struct gs_texture *upscale(struct gs_texture *src, uint32_t in_width,
 	if (!load_api())
 		return nullptr;
 
+	if (g_state.retry_wait > 0) {
+		--g_state.retry_wait;
+		return nullptr;
+	}
+
 	Api &api = g_state.api;
 	if (!ensure_pipeline(src, in_width, in_height, out_width, out_height)) {
 		blog(LOG_WARNING, "[frameflow] maxine pipeline init failed");
 		release_pipeline();
+		g_state.retry_wait = 600;
 		return nullptr;
 	}
 
 	gs_copy_texture_region(g_state.in_texture, 0, 0, src, 0, 0, in_width,
 			       in_height);
 
-	if (api.img_map(&g_state.wrap_in, g_state.stream) != 0)
+	Status st = api.img_map(&g_state.wrap_in, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine input map failed: %d", st);
 		return nullptr;
+	}
 
-	Status st = api.img_transfer(&g_state.wrap_in, g_state.gpu_in, 1.f,
-				     g_state.stream, nullptr);
-
-	api.img_unmap(&g_state.wrap_in, g_state.stream);
+	st = api.img_transfer(&g_state.wrap_in, g_state.gpu_in, 1.f,
+			      g_state.stream, nullptr);
+	if (st == 0)
+		st = api.img_unmap(&g_state.wrap_in, g_state.stream);
+	else
+		api.img_unmap(&g_state.wrap_in, g_state.stream);
 	if (st != 0) {
 		blog(LOG_WARNING, "[frameflow] maxine input transfer failed: %d",
 		     st);
@@ -427,14 +457,20 @@ struct gs_texture *upscale(struct gs_texture *src, uint32_t in_width,
 		return nullptr;
 	}
 
-	if (api.img_map(&g_state.wrap_out, g_state.stream) != 0)
+	st = api.img_map(&g_state.wrap_out, g_state.stream);
+	if (st != 0) {
+		blog(LOG_WARNING, "[frameflow] maxine output map failed: %d", st);
 		return nullptr;
+	}
 
 	st = api.img_transfer(g_state.gpu_out, &g_state.wrap_out, 1.f,
 			      g_state.stream, nullptr);
-
-	api.stream_sync(g_state.stream);
-	api.img_unmap(&g_state.wrap_out, g_state.stream);
+	if (st == 0)
+		st = api.stream_sync(g_state.stream);
+	if (st == 0)
+		st = api.img_unmap(&g_state.wrap_out, g_state.stream);
+	else
+		api.img_unmap(&g_state.wrap_out, g_state.stream);
 	if (st != 0) {
 		blog(LOG_WARNING, "[frameflow] maxine output transfer failed: %d",
 		     st);
@@ -454,12 +490,7 @@ void shutdown()
 	if (!g_state.loaded)
 		return;
 	release_pipeline();
-	if (g_state.api.vfx)
-		FreeLibrary(g_state.api.vfx);
-	if (g_state.api.img)
-		FreeLibrary(g_state.api.img);
-	if (g_state.api.ngx)
-		FreeLibrary(g_state.api.ngx);
+	release_modules();
 	g_state = State{};
 }
 
