@@ -250,27 +250,22 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 		     uint32_t in_height, uint32_t out_width,
 		     uint32_t out_height)
 {
+	(void)src;
 	Api &api = g_state.api;
 
-	ID3D11Texture2D *src_d3d = static_cast<ID3D11Texture2D *>(
-		gs_texture_get_obj(g_state.in_texture));
-	if (!src_d3d) {
-		blog(LOG_WARNING, "[frameflow] maxine: input texture unavailable");
-		return false;
-	}
-
-	if (g_state.effect && g_state.in_d3d == src_d3d &&
-	    g_state.in_width == in_width && g_state.in_height == in_height &&
-	    g_state.out_width == out_width && g_state.out_height == out_height)
+	if (g_state.effect && g_state.in_width == in_width &&
+	    g_state.in_height == in_height && g_state.out_width == out_width &&
+	    g_state.out_height == out_height)
 		return true;
 
 	release_pipeline();
 
-	// OBS textures are typeless; the SDK needs a typed format.
+	// OBS textures are typeless; the SDK needs typed formats.
 	g_state.in_texture = gs_texture_create(in_width, in_height,
 					       GS_RGBA_UNORM, 1, nullptr, 0);
 	if (!g_state.in_texture) {
-		blog(LOG_WARNING, "[frameflow] maxine: input texture create failed");
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: input texture create failed");
 		return false;
 	}
 
@@ -278,14 +273,24 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 						GS_RGBA_UNORM, 1, nullptr,
 						GS_RENDER_TARGET);
 	if (!g_state.out_texture) {
-		blog(LOG_WARNING, "[frameflow] maxine: output texture create failed");
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: output texture create failed");
+		return false;
+	}
+
+	ID3D11Texture2D *src_d3d = static_cast<ID3D11Texture2D *>(
+		gs_texture_get_obj(g_state.in_texture));
+	if (!src_d3d) {
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: input texture unavailable");
 		return false;
 	}
 
 	ID3D11Texture2D *out_d3d = static_cast<ID3D11Texture2D *>(
 		gs_texture_get_obj(g_state.out_texture));
 	if (!out_d3d) {
-		blog(LOG_WARNING, "[frameflow] maxine: output texture unavailable");
+		blog(LOG_WARNING,
+		     "[frameflow] maxine: output texture unavailable");
 		return false;
 	}
 
@@ -310,6 +315,7 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 		return false;
 	}
 	g_state.wrap_in_valid = true;
+
 	st = api.img_from_d3d11(&g_state.wrap_out, out_d3d);
 	if (st != 0) {
 		blog(LOG_WARNING, "[frameflow] maxine: output wrap failed %d", st);
@@ -362,7 +368,6 @@ bool ensure_pipeline(struct gs_texture *src, uint32_t in_width,
 	g_state.out_height = out_height;
 	return true;
 }
-
 } // namespace
 
 namespace maxine {
